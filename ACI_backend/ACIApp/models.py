@@ -419,3 +419,51 @@ class VerificationEvidence(models.Model):
                 name="unique_verification_evidence",
             ),
         ]
+
+
+class VerificationRun(models.Model):
+    """A queued or completed attempt to re-establish a verification."""
+
+    STATUS_CHOICES = [
+        ("queued", "Queued"),
+        ("running", "Running"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    verification = models.ForeignKey(
+        Verification,
+        on_delete=models.CASCADE,
+        related_name="runs",
+    )
+
+    triggering_changed_file = models.ForeignKey(
+        ChangedFile,
+        on_delete=models.CASCADE,
+        related_name="reverification_runs",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="queued",
+    )
+
+    reason = models.CharField(max_length=255)
+
+    requested_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["verification"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="unique_active_verification_run",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Verification {self.verification_id} - {self.status}"
