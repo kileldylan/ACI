@@ -1,14 +1,14 @@
 import hashlib
 import hmac
 import json
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
 from django.conf import settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from ACI_backend.ACIApp.models import PullRequest, Repository, Commit
+from ACI_backend.ACIApp.models import Commit, PullRequest, Repository
 
 
 @pytest.fixture
@@ -96,8 +96,25 @@ def test_github_webhook_rejects_missing_signature(api_client):
         "detail": "Invalid webhook signature.",
     }
 
+
 @pytest.mark.django_db
-def test_github_pull_request_creates_repository_and_pull_request(api_client):
+@patch(
+    "ACI_backend.integrations.github.service.GitHubClient.get_pull_request_commits"
+)
+def test_github_pull_request_creates_repository_and_pull_request(
+    mock_get_commits,
+    api_client,
+):
+    """
+    Verify that a valid GitHub pull_request webhook creates
+    the Repository and PullRequest records.
+
+    The GitHub API itself is mocked because this test is testing
+    our webhook/service/database logic, not GitHub's API.
+    """
+
+    mock_get_commits.return_value = []
+
     payload = {
         "action": "opened",
         "repository": {
@@ -148,18 +165,33 @@ def test_github_pull_request_creates_repository_and_pull_request(api_client):
     )
 
     assert repository.full_name == "kilel/aci-demo"
+    assert repository.owner == "kilel"
+    assert repository.name == "aci-demo"
+    assert repository.default_branch == "main"
 
     pull_request = PullRequest.objects.get(
         repository=repository,
         number=1,
     )
 
+    assert pull_request.github_id == 987654
     assert pull_request.title == "Add authentication"
     assert pull_request.author == "kilel"
     assert pull_request.source_branch == "feature/auth"
     assert pull_request.target_branch == "main"
+    assert pull_request.state == "open"
+    assert pull_request.is_merged is False
+    assert pull_request.base_sha == (
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
     assert pull_request.head_sha == (
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+
+    mock_get_commits.assert_called_once_with(
+        owner="kilel",
+        repository="aci-demo",
+        pull_request_number=1,
     )
 
 
@@ -171,6 +203,23 @@ def test_github_pull_request_ingests_commits(
     mock_github_client,
     api_client,
 ):
+    """
+    Verify that commits returned by GitHub are persisted.
+    """
+
+    mock_github_client.return_value.get_pull_request_commits.return_value = [
+        {
+            "sha": "cccccccccccccccccccccccccccccccccccccccc",
+            "commit": {
+                "message": "Add authentication",
+                "author": {
+                    "name": "kilel",
+                    "date": "2026-08-17T10:30:00Z",
+                },
+            },
+        }
+    ]
+
     payload = {
         "action": "opened",
         "repository": {
@@ -203,19 +252,6 @@ def test_github_pull_request_ingests_commits(
             },
         },
     }
-
-    mock_github_client.return_value.get_pull_request_commits.return_value = [
-        {
-            "sha": "cccccccccccccccccccccccccccccccccccccccc",
-            "commit": {
-                "message": "Add authentication",
-                "author": {
-                    "name": "kilel",
-                    "date": "2026-08-17T10:30:00Z",
-                },
-            },
-        }
-    ]
 
     signature, body = create_github_signature(payload)
 
