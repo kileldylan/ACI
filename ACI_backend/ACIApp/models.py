@@ -226,6 +226,54 @@ class RequirementPullRequest(models.Model):
             f"{self.pull_request}"
         )
 
+
+class RequirementCriterion(models.Model):
+    """A testable expectation derived from a requirement."""
+
+    CATEGORY_CHOICES = [
+        ("behavior", "Behavior"),
+        ("implementation", "Implementation"),
+        ("test", "Test"),
+        ("integration", "Integration"),
+        ("data", "Data"),
+        ("security", "Security"),
+        ("configuration", "Configuration"),
+    ]
+
+    requirement = models.ForeignKey(
+        Requirement,
+        on_delete=models.CASCADE,
+        related_name="criteria",
+    )
+
+    text = models.TextField()
+    category = models.CharField(
+        max_length=30,
+        choices=CATEGORY_CHOICES,
+        default="behavior",
+    )
+    priority = models.PositiveSmallIntegerField(default=0)
+    required = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    # Examples: path patterns, symbols, test expectations, API contracts, and
+    # negative expectations. The schema stays provider-independent.
+    expectations = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+        indexes = [
+            models.Index(fields=["requirement", "is_active", "order"]),
+        ]
+
+    def __str__(self):
+        return f"{self.requirement} - {self.text[:80]}"
+
+
 class Evidence(models.Model):
     TYPE_CHOICES = [
         ("code", "Code"),
@@ -419,6 +467,124 @@ class VerificationEvidence(models.Model):
                 name="unique_verification_evidence",
             ),
         ]
+
+
+class CriterionVerification(models.Model):
+    """An auditable evaluation of one criterion within a verification."""
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("satisfied", "Satisfied"),
+        ("partial", "Partial"),
+        ("missing", "Missing"),
+        ("not_applicable", "Not Applicable"),
+        ("failed", "Failed"),
+    ]
+
+    verification = models.ForeignKey(
+        Verification,
+        on_delete=models.CASCADE,
+        related_name="criterion_results",
+    )
+    criterion = models.ForeignKey(
+        RequirementCriterion,
+        on_delete=models.CASCADE,
+        related_name="verification_results",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="pending",
+    )
+    summary = models.TextField(blank=True)
+    confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    evaluated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["evaluated_at", "id"]
+        indexes = [
+            models.Index(fields=["verification", "criterion"]),
+        ]
+
+    def __str__(self):
+        return f"Criterion {self.criterion_id} - {self.status}"
+
+
+class CriterionVerificationEvidence(models.Model):
+    """Evidence used for a specific criterion evaluation."""
+
+    criterion_verification = models.ForeignKey(
+        CriterionVerification,
+        on_delete=models.CASCADE,
+        related_name="evidence_links",
+    )
+    evidence = models.ForeignKey(
+        Evidence,
+        on_delete=models.CASCADE,
+        related_name="criterion_verification_links",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["criterion_verification", "evidence"],
+                name="unique_criterion_verification_evidence",
+            ),
+        ]
+
+
+class DeliveryDecision(models.Model):
+    """An explainable delivery conclusion derived from a verification."""
+
+    STATUS_CHOICES = [
+        ("verified", "Verified"),
+        ("partial", "Partial"),
+        ("unverified", "Unverified"),
+        ("stale", "Stale"),
+        ("failed", "Failed"),
+    ]
+
+    verification = models.ForeignKey(
+        Verification,
+        on_delete=models.CASCADE,
+        related_name="decisions",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    summary = models.TextField(blank=True)
+    confidence = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    # A compact, immutable explanation snapshot, including missing criteria.
+    rationale = models.JSONField(default=dict, blank=True)
+    is_current = models.BooleanField(default=True)
+    decided_at = models.DateTimeField(auto_now_add=True)
+    invalidated_at = models.DateTimeField(null=True, blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["verification"],
+                condition=models.Q(is_current=True),
+                name="unique_current_delivery_decision",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["verification", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Verification {self.verification_id} - {self.status}"
 
 
 class VerificationRun(models.Model):

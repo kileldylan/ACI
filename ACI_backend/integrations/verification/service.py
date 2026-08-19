@@ -3,6 +3,7 @@ from django.utils import timezone
 
 from ACI_backend.ACIApp.models import (
     ChangedFile,
+    DeliveryDecision,
     Evidence,
     EvidenceInvalidation,
     PullRequest,
@@ -132,6 +133,112 @@ def ingest_changed_file_evidence(
     return evidence_records
 
 
+def ingest_github_evidence(*, pull_request, commit, event, payload):
+    """Persist deterministic test or CI evidence from a GitHub event."""
+
+    if event == "check_run":
+        check_run = payload["check_run"]
+        name = check_run.get("name", "")
+        evidence_type = "test" if name.lower().startswith(
+            ("test", "pytest", "unit")
+        ) else "ci"
+        external_key = f"check_run:{name}"
+        conclusion = check_run.get("conclusion") or check_run.get("status", "")
+        evidence_status = "valid" if conclusion == "success" else "invalid"
+        description = f"GitHub check {name or 'unnamed'} concluded {conclusion}."
+        metadata = {
+            "source": "github",
+            "event": event,
+            "external_key": external_key,
+            "name": name,
+            "status": check_run.get("status", ""),
+            "conclusion": check_run.get("conclusion"),
+            "url": check_run.get("html_url", ""),
+            "head_sha": commit.sha,
+        }
+    elif event == "status":
+        context = payload["context"]
+        external_key = f"status:{context}"
+        state = payload.get("state", "")
+        evidence_status = "valid" if state == "success" else "invalid"
+        evidence_type = "test" if any(
+            marker in context.lower() for marker in ("test", "pytest", "unit")
+        ) else "ci"
+        description = f"GitHub status {context} is {state}."
+        metadata = {
+            "source": "github",
+            "event": event,
+            "external_key": external_key,
+            "context": context,
+            "state": state,
+            "target_url": payload.get("target_url", ""),
+            "head_sha": commit.sha,
+        }
+    else:
+        raise ValueError(f"Unsupported GitHub evidence event: {event}")
+
+    evidence_records = []
+    requirement_ids = pull_request.requirement_links.values_list(
+        "requirement", flat=True,
+    )
+    for requirement_id in requirement_ids:
+        prior_evidence = Evidence.objects.filter(
+            requirement_id=requirement_id,
+            pull_request=pull_request,
+            evidence_type=evidence_type,
+            metadata__external_key=external_key,
+            status="valid",
+        ).exclude(commit=commit)
+        for evidence in prior_evidence:
+            _invalidate_evidence(evidence, triggering_commit=commit)
+
+        evidence, _ = Evidence.objects.update_or_create(
+            requirement_id=requirement_id,
+            pull_request=pull_request,
+            commit=commit,
+            evidence_type=evidence_type,
+            metadata__external_key=external_key,
+            defaults={
+                "status": evidence_status,
+                "description": description,
+                "metadata": metadata,
+            },
+        )
+        evidence_records.append(evidence)
+
+    return evidence_records
+
+
+def _invalidate_evidence(evidence, *, triggering_commit):
+    """Mark non-file evidence stale and queue affected verifications."""
+
+    evidence.status = "stale"
+    evidence.save(update_fields=["status", "updated_at"])
+    affected_verifications = Verification.objects.filter(
+        evidence_links__evidence=evidence,
+    ).distinct()
+    stale_at = timezone.now()
+    affected_verifications.exclude(status="stale").update(
+        status="stale",
+        invalidated_at=stale_at,
+    )
+    DeliveryDecision.objects.filter(
+        verification__in=affected_verifications,
+        is_current=True,
+    ).exclude(status="stale").update(
+        status="stale",
+        invalidated_at=stale_at,
+    )
+    triggering_file = triggering_commit.changed_files.order_by("id").first()
+    if triggering_file is not None:
+        for verification in affected_verifications:
+            queue_reverification(
+                verification=verification,
+                triggering_changed_file=triggering_file,
+                reason=f"A newer GitHub result arrived for {triggering_commit.sha}.",
+            )
+
+
 def create_verification(
     requirement,
     pull_request,
@@ -208,6 +315,13 @@ def invalidate_evidence_for_changed_file(changed_file):
         ).distinct()
 
         affected_verifications.exclude(status="stale").update(
+            status="stale",
+            invalidated_at=stale_at,
+        )
+        DeliveryDecision.objects.filter(
+            verification__in=affected_verifications,
+            is_current=True,
+        ).exclude(status="stale").update(
             status="stale",
             invalidated_at=stale_at,
         )

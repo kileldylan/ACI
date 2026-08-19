@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from ACI_backend.ACIApp.models import (
+    DeliveryDecision,
     Evidence,
     Repository,
     Verification,
@@ -90,5 +91,23 @@ class VerificationRunSerializer(serializers.ModelSerializer):
             "requested_at",
             "started_at",
             "completed_at",
+        ]
+        read_only_fields = fields
+
+
+class DeliveryDecisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeliveryDecision
+        fields = [
+            "id",
+            "verification",
+            "status",
+            "summary",
+            "confidence",
+            "rationale",
+            "is_current",
+            "decided_at",
+            "invalidated_at",
+            "superseded_at",
         ]
         read_only_fields = fields

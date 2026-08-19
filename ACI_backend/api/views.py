@@ -1,12 +1,14 @@
 from rest_framework import viewsets
 
 from ACI_backend.ACIApp.models import (
+    DeliveryDecision,
     Evidence,
     Repository,
     Verification,
     VerificationRun,
 )
 from ACI_backend.api.serializers import (
+    DeliveryDecisionSerializer,
     EvidenceSerializer,
     RepositorySerializer,
     VerificationRunSerializer,
@@ -71,4 +73,27 @@ class VerificationRunViewSet(viewsets.ReadOnlyModelViewSet):
             )
         if status:
             queryset = queryset.filter(status=status)
+        return queryset
+
+
+class DeliveryDecisionViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = DeliveryDecisionSerializer
+
+    def get_queryset(self):
+        queryset = DeliveryDecision.objects.select_related(
+            "verification",
+            "verification__requirement",
+            "verification__pull_request",
+        ).order_by("-decided_at")
+        repository_id = self.request.query_params.get("repository")
+        status = self.request.query_params.get("status")
+        current = self.request.query_params.get("current")
+        if repository_id:
+            queryset = queryset.filter(
+                verification__requirement__repository_id=repository_id,
+            )
+        if status:
+            queryset = queryset.filter(status=status)
+        if current is not None:
+            queryset = queryset.filter(is_current=current.lower() == "true")
         return queryset

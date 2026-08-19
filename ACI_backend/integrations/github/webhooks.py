@@ -6,7 +6,10 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from ACI_backend.integrations.github.service import process_pull_request_event
+from ACI_backend.integrations.github.service import (
+    process_github_evidence_event,
+    process_pull_request_event,
+)
 
 
 @csrf_exempt
@@ -39,5 +42,7 @@ def github_webhook(request):
     if event == "pull_request" and isinstance(payload, dict) and "repository" in payload and "pull_request" in payload:
         # delegate full processing (including commits) to the service layer
         process_pull_request_event(payload)
+    elif event in {"check_run", "status"} and isinstance(payload, dict) and "repository" in payload:
+        process_github_evidence_event(event, payload)
 
     return JsonResponse({"message": "Webhook received.", "event": event}, status=200)

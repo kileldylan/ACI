@@ -12,6 +12,7 @@ from ACI_backend.ACIApp.models import (
     VerificationEvidence,
     VerificationRun,
 )
+from ACI_backend.integrations.github.service import process_github_evidence_event
 from ACI_backend.integrations.verification.service import (
     claim_reverification_run,
     complete_reverification_run,
@@ -277,3 +278,70 @@ def test_evidence_policy_verifies_when_code_test_and_ci_are_valid():
         "PR #18 has valid code, test, and CI evidence for this requirement."
     )
     assert len(conclusion["evidence"]) == 3
+
+
+@pytest.mark.django_db
+def test_github_check_run_evidence_is_idempotent_and_stale_aware():
+    repository = Repository.objects.create(
+        github_id=456789,
+        owner="kilel",
+        name="aci-demo-four",
+        full_name="kilel/aci-demo-four",
+    )
+    requirement = Requirement.objects.create(
+        repository=repository,
+        external_id="AUTH-6",
+        source="jira",
+        title="Users can authenticate",
+    )
+    pull_request = create_pull_request(
+        repository,
+        number=22,
+        sha="i" * 40,
+    )
+    requirement.pull_request_links.create(pull_request=pull_request)
+
+    first_payload = {
+        "repository": {"id": repository.github_id},
+        "check_run": {
+            "id": 1,
+            "name": "pytest",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": pull_request.head_sha,
+            "pull_requests": [{"number": pull_request.number}],
+        },
+    }
+
+    first = process_github_evidence_event("check_run", first_payload)
+    repeated = process_github_evidence_event("check_run", first_payload)
+
+    assert len(first) == 1
+    assert repeated[0].id == first[0].id
+    assert Evidence.objects.count() == 1
+    assert first[0].evidence_type == "test"
+    assert first[0].metadata["head_sha"] == pull_request.head_sha
+
+    second_commit = Commit.objects.create(
+        repository=repository,
+        pull_request=pull_request,
+        sha="j" * 40,
+        message="Update authentication",
+        author="kilel",
+        committed_at="2026-08-19T10:00:00Z",
+    )
+    second_payload = {
+        **first_payload,
+        "check_run": {
+            **first_payload["check_run"],
+            "id": 2,
+            "head_sha": second_commit.sha,
+        },
+    }
+
+    second = process_github_evidence_event("check_run", second_payload)
+
+    first[0].refresh_from_db()
+    assert first[0].status == "stale"
+    assert second[0].status == "valid"
+    assert Evidence.objects.count() == 2

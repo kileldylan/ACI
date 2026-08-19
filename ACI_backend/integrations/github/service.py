@@ -9,6 +9,7 @@ from ACI_backend.ACIApp.models import (
 from ACI_backend.integrations.github.client import GitHubClient
 from ACI_backend.integrations.verification.service import (
     invalidate_evidence_for_changed_file,
+    ingest_github_evidence,
 )
 
 
@@ -134,3 +135,48 @@ def ingest_commit_files(commit, github_commit):
         changed_files.append(changed_file)
 
     return changed_files
+
+
+@transaction.atomic
+def process_github_evidence_event(event, payload):
+    """Ingest a GitHub check or status event for linked requirements."""
+
+    repository_data = payload["repository"]
+    repository = Repository.objects.get(github_id=repository_data["id"])
+    if event == "check_run":
+        sha = payload.get("check_run", {}).get("head_sha")
+    else:
+        sha = payload.get("sha")
+    if not sha:
+        return []
+
+    pull_request_number = None
+    if event == "check_run":
+        pull_requests = payload.get("check_run", {}).get("pull_requests", [])
+        if pull_requests:
+            pull_request_number = pull_requests[0].get("number")
+
+    lookup = {"number": pull_request_number} if pull_request_number else {"head_sha": sha}
+    pull_request = PullRequest.objects.filter(
+        repository=repository,
+        **lookup,
+    ).first()
+    if pull_request is None:
+        return []
+
+    commit, _ = Commit.objects.update_or_create(
+        sha=sha,
+        defaults={
+            "repository": repository,
+            "pull_request": pull_request,
+            "message": "GitHub check/status result",
+            "author": "github",
+            "committed_at": pull_request.updated_at,
+        },
+    )
+    return ingest_github_evidence(
+        pull_request=pull_request,
+        commit=commit,
+        event=event,
+        payload=payload,
+    )
