@@ -23,6 +23,25 @@ environ.Env.read_env(BASE_DIR / ".env")
 
 GITHUB_WEBHOOK_SECRET = env("GITHUB_WEBHOOK_SECRET")
 GITHUB_ACCESS_TOKEN = env("GITHUB_ACCESS_TOKEN")
+GITHUB_TEST_EVIDENCE_CONTEXTS = tuple(
+    context.strip()
+    for context in env(
+        "GITHUB_TEST_EVIDENCE_CONTEXTS",
+        default="test,tests,pytest,unit,unit-tests",
+    ).split(",")
+    if context.strip()
+)
+GITHUB_CI_EVIDENCE_CONTEXTS = tuple(
+    context.strip()
+    for context in env(
+        "GITHUB_CI_EVIDENCE_CONTEXTS",
+        default="build,ci,lint,codeql,security",
+    ).split(",")
+    if context.strip()
+)
+LLM_PROVIDER = env("LLM_PROVIDER", default="deterministic")
+LLM_MODEL = env("LLM_MODEL", default="gpt-4.1-mini")
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 SECRET_KEY = env("SECRET_KEY")
 
 ALLOWED_HOSTS = env.list(

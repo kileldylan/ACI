@@ -10,6 +10,57 @@ from ACI_backend.ACIApp.models import (
 from ACI_backend.ACIApp.services.verification import (
     create_verification,
 )
+from ACI_backend.integrations.verification.service import (
+    classify_github_context,
+    validate_evaluator_conclusion,
+)
+
+
+def test_github_context_classification_is_explicit():
+    assert classify_github_context("pytest") == "test"
+    assert classify_github_context("build") == "ci"
+    assert classify_github_context("unrecognized-check") is None
+
+
+def test_evaluator_contract_accepts_valid_conclusion():
+    requirement = Requirement(pk=1)
+    pull_request = PullRequest(pk=2)
+    evidence = Evidence(
+        pk=3,
+        requirement=requirement,
+        pull_request=pull_request,
+        status="valid",
+    )
+    conclusion = {
+        "status": "verified",
+        "summary": "Evidence is complete.",
+        "confidence": 0.9,
+        "evidence": [evidence],
+    }
+
+    assert validate_evaluator_conclusion(
+        requirement=requirement,
+        evidence=[evidence],
+        conclusion=conclusion,
+    ) == conclusion
+
+
+def test_evaluator_contract_rejects_stale_evidence():
+    requirement = Requirement(pk=1)
+    evidence = Evidence(pk=3, requirement=requirement, status="stale")
+    conclusion = {
+        "status": "verified",
+        "summary": "Evidence is complete.",
+        "confidence": 0.9,
+        "evidence": [evidence],
+    }
+
+    with pytest.raises(ValueError, match="stale"):
+        validate_evaluator_conclusion(
+            requirement=requirement,
+            evidence=[evidence],
+            conclusion=conclusion,
+        )
 
 
 @pytest.mark.django_db

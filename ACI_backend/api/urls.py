@@ -4,6 +4,7 @@ from ACI_backend.api.views import (
     DeliveryDecisionViewSet,
     EvidenceViewSet,
     RepositoryViewSet,
+    TestExecutionViewSet,
     VerificationRunViewSet,
     VerificationViewSet,
 )
@@ -29,6 +30,11 @@ router.register(
     "verification-runs",
     VerificationRunViewSet,
     basename="verification-run",
+)
+router.register(
+    "test-executions",
+    TestExecutionViewSet,
+    basename="test-execution",
 )
 router.register(
     "delivery-decisions",

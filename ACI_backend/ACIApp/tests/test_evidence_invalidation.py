@@ -1,4 +1,6 @@
 import pytest
+from datetime import timedelta
+from django.utils import timezone
 
 from ACI_backend.ACIApp.models import (
     ChangedFile,
@@ -16,9 +18,11 @@ from ACI_backend.integrations.github.service import process_github_evidence_even
 from ACI_backend.integrations.verification.service import (
     claim_reverification_run,
     complete_reverification_run,
+    evaluate,
     evaluate_reverification_evidence,
     invalidate_evidence_for_changed_file,
     process_next_reverification_run,
+    recover_stuck_reverification_runs,
 )
 
 
@@ -279,6 +283,69 @@ def test_evidence_policy_verifies_when_code_test_and_ci_are_valid():
     )
     assert len(conclusion["evidence"]) == 3
 
+    stable_conclusion = evaluate(
+        requirement,
+        Evidence.objects.filter(
+            requirement=requirement,
+            pull_request=pull_request,
+            status="valid",
+        ),
+    )
+    assert stable_conclusion["status"] == "verified"
+    assert stable_conclusion["evidence"]
+
+
+@pytest.mark.django_db
+def test_evidence_policy_fails_when_current_github_check_is_invalid():
+    repository = Repository.objects.create(
+        github_id=567890,
+        owner="kilel",
+        name="aci-demo-five",
+        full_name="kilel/aci-demo-five",
+    )
+    requirement = Requirement.objects.create(
+        repository=repository,
+        external_id="AUTH-7",
+        source="jira",
+        title="Users can authenticate",
+    )
+    pull_request = create_pull_request(
+        repository,
+        number=23,
+        sha="k" * 40,
+    )
+    for evidence_type in ["code", "test", "ci"]:
+        Evidence.objects.create(
+            requirement=requirement,
+            pull_request=pull_request,
+            evidence_type=evidence_type,
+            status="valid",
+            description=f"Valid {evidence_type} evidence.",
+        )
+    Evidence.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        evidence_type="ci",
+        status="invalid",
+        metadata={
+            "source": "github",
+            "head_sha": pull_request.head_sha,
+            "context": "build",
+            "state": "failure",
+        },
+    )
+
+    conclusion = evaluate_reverification_evidence(
+        requirement=requirement,
+        pull_request=pull_request,
+    )
+
+    assert conclusion["status"] == "failed"
+    assert conclusion["confidence"] == 0.0
+    assert conclusion["summary"] == (
+        "A test or CI check failed for the current head of PR #23."
+    )
+
 
 @pytest.mark.django_db
 def test_github_check_run_evidence_is_idempotent_and_stale_aware():
@@ -345,3 +412,183 @@ def test_github_check_run_evidence_is_idempotent_and_stale_aware():
     assert first[0].status == "stale"
     assert second[0].status == "valid"
     assert Evidence.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_new_github_test_and_ci_results_stale_old_evidence_once():
+    repository = Repository.objects.create(
+        github_id=678901,
+        owner="kilel",
+        name="aci-demo-six",
+        full_name="kilel/aci-demo-six",
+    )
+    requirement = Requirement.objects.create(
+        repository=repository,
+        external_id="AUTH-8",
+        source="jira",
+        title="Users can authenticate",
+    )
+    pull_request = create_pull_request(
+        repository,
+        number=24,
+        sha="m" * 40,
+    )
+    requirement.pull_request_links.create(pull_request=pull_request)
+    old_commit = Commit.objects.create(
+        repository=repository,
+        pull_request=pull_request,
+        sha=pull_request.head_sha,
+        message="Implement authentication",
+        author="kilel",
+        committed_at="2026-08-19T10:00:00Z",
+    )
+    old_file = ChangedFile.objects.create(
+        commit=old_commit,
+        filename="auth/service.py",
+        status="modified",
+    )
+    old_test = Evidence.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        commit=old_commit,
+        evidence_type="test",
+        status="valid",
+        metadata={
+            "source": "github",
+            "external_key": "check_run:pytest",
+            "head_sha": old_commit.sha,
+        },
+    )
+    old_ci = Evidence.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        commit=old_commit,
+        evidence_type="ci",
+        status="valid",
+        metadata={
+            "source": "github",
+            "external_key": "status:build",
+            "head_sha": old_commit.sha,
+        },
+    )
+    verification = Verification.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        status="verified",
+    )
+    VerificationEvidence.objects.create(
+        verification=verification,
+        evidence=old_test,
+    )
+    VerificationEvidence.objects.create(
+        verification=verification,
+        evidence=old_ci,
+    )
+    new_commit = Commit.objects.create(
+        repository=repository,
+        pull_request=pull_request,
+        sha="n" * 40,
+        message="Update authentication",
+        author="kilel",
+        committed_at="2026-08-19T11:00:00Z",
+    )
+    ChangedFile.objects.create(
+        commit=new_commit,
+        filename=old_file.filename,
+        status="modified",
+    )
+
+    process_github_evidence_event(
+        "check_run",
+        {
+            "repository": {"id": repository.github_id},
+            "check_run": {
+                "id": 2,
+                "name": "pytest",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": new_commit.sha,
+                "pull_requests": [{"number": pull_request.number}],
+            },
+        },
+    )
+    process_github_evidence_event(
+        "status",
+        {
+            "repository": {"id": repository.github_id},
+            "sha": new_commit.sha,
+            "context": "build",
+            "state": "success",
+        },
+    )
+
+    old_test.refresh_from_db()
+    old_ci.refresh_from_db()
+    verification.refresh_from_db()
+    assert old_test.status == "stale"
+    assert old_ci.status == "stale"
+    assert verification.status == "stale"
+    assert verification.runs.filter(status="queued").count() == 1
+
+
+@pytest.mark.django_db
+def test_stuck_reverification_run_is_failed_and_traceable():
+    repository = Repository.objects.create(
+        github_id=789123,
+        owner="kilel",
+        name="aci-demo-seven",
+        full_name="kilel/aci-demo-seven",
+    )
+    requirement = Requirement.objects.create(
+        repository=repository,
+        external_id="AUTH-9",
+        source="jira",
+        title="Users can authenticate",
+    )
+    pull_request = create_pull_request(
+        repository,
+        number=25,
+        sha="o" * 40,
+    )
+    commit = Commit.objects.create(
+        repository=repository,
+        pull_request=pull_request,
+        sha="p" * 40,
+        message="Implement authentication",
+        author="kilel",
+        committed_at="2026-08-19T10:00:00Z",
+    )
+    changed_file = ChangedFile.objects.create(
+        commit=commit,
+        filename="auth/service.py",
+        status="modified",
+    )
+    verification = Verification.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        status="stale",
+    )
+    started_at = timezone.now() - timedelta(hours=2)
+    run = VerificationRun.objects.create(
+        verification=verification,
+        triggering_changed_file=changed_file,
+        status="running",
+        reason="Worker recovery test.",
+        started_at=started_at,
+    )
+
+    recovered = recover_stuck_reverification_runs(
+        timeout=timedelta(hours=1),
+        now=timezone.now(),
+    )
+
+    assert [item.id for item in recovered] == [run.id]
+    verification.refresh_from_db()
+    run.refresh_from_db()
+    assert verification.status == "failed"
+    assert verification.summary == (
+        "Re-verification worker did not complete within the allowed "
+        "time window."
+    )
+    assert run.status == "failed"
+    assert run.completed_at is not None

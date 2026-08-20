@@ -1,6 +1,8 @@
 import pytest
 
 from ACI_backend.ACIApp.models import (
+    ChangedFile,
+    Commit,
     Evidence,
     PullRequest,
     Repository,
@@ -13,6 +15,7 @@ from ACI_backend.integrations.verification.criteria import (
     generate_initial_criteria,
     list_active_criteria,
     record_criterion_verification,
+    execute_criteria,
     update_criterion,
 )
 
@@ -91,3 +94,101 @@ def test_criterion_results_retain_evidence_traceability(requirement):
     assert result.evidence_links.get().evidence == evidence
     assert evidence.criterion_verification_links.get().criterion_verification == result
     assert verification.evidence_links.get().evidence == evidence
+
+
+@pytest.mark.django_db
+def test_execute_criteria_matches_current_evidence_to_expectations(requirement):
+    criterion = create_criterion(
+        requirement=requirement,
+        text="The reset endpoint is implemented.",
+        expectations={
+            "evidence_types": "code",
+            "path_patterns": ["accounts/*.py"],
+        },
+    )
+    pull_request = PullRequest.objects.create(
+        repository=requirement.repository,
+        github_id=99003,
+        number=2,
+        title="Implement reset endpoint",
+        author="aci",
+        source_branch="feature/reset-endpoint",
+        target_branch="main",
+        base_sha="b" * 40,
+        head_sha="a" * 40,
+        created_at="2026-08-19T07:00:00Z",
+        updated_at="2026-08-19T07:00:00Z",
+    )
+    verification = Verification.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+    )
+    commit = Commit.objects.create(
+        repository=requirement.repository,
+        pull_request=pull_request,
+        sha="c" * 40,
+        message="Implement reset endpoint",
+        author="aci",
+        committed_at="2026-08-19T07:00:00Z",
+    )
+    changed_file = ChangedFile.objects.create(
+        commit=commit,
+        filename="accounts/reset.py",
+    )
+    evidence = Evidence.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        commit=commit,
+        changed_file=changed_file,
+        evidence_type="code",
+        status="valid",
+    )
+
+    results = execute_criteria(
+        verification=verification,
+        evidence=[evidence],
+    )
+
+    assert len(results) == 1
+    assert results[0].criterion == criterion
+    assert results[0].status == "satisfied"
+    assert results[0].evidence_links.get().evidence == evidence
+
+
+@pytest.mark.django_db
+def test_execute_criteria_marks_unmatched_required_criterion_missing(requirement):
+    create_criterion(
+        requirement=requirement,
+        text="The reset flow has automated tests.",
+        category="test",
+    )
+    pull_request = PullRequest.objects.create(
+        repository=requirement.repository,
+        github_id=99004,
+        number=3,
+        title="Implement reset flow",
+        author="aci",
+        source_branch="feature/reset-flow",
+        target_branch="main",
+        base_sha="b" * 40,
+        head_sha="a" * 40,
+        created_at="2026-08-19T07:00:00Z",
+        updated_at="2026-08-19T07:00:00Z",
+    )
+    verification = Verification.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+    )
+    code_evidence = Evidence.objects.create(
+        requirement=requirement,
+        pull_request=pull_request,
+        evidence_type="code",
+        status="valid",
+    )
+
+    results = execute_criteria(
+        verification=verification,
+        evidence=[code_evidence],
+    )
+
+    assert results[0].status == "missing"

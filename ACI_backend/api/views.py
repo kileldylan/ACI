@@ -4,6 +4,7 @@ from ACI_backend.ACIApp.models import (
     DeliveryDecision,
     Evidence,
     Repository,
+    TestExecution,
     Verification,
     VerificationRun,
 )
@@ -12,6 +13,7 @@ from ACI_backend.api.serializers import (
     EvidenceSerializer,
     RepositorySerializer,
     VerificationRunSerializer,
+    TestExecutionSerializer,
     VerificationSerializer,
 )
 
@@ -30,6 +32,8 @@ class EvidenceViewSet(viewsets.ReadOnlyModelViewSet):
             "pull_request",
             "commit",
             "changed_file",
+        ).prefetch_related(
+            "invalidations__triggering_changed_file",
         ).order_by("-updated_at")
         repository_id = self.request.query_params.get("repository")
         status = self.request.query_params.get("status")
@@ -47,7 +51,10 @@ class VerificationViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = Verification.objects.select_related(
             "requirement",
             "pull_request",
-        ).prefetch_related("evidence_links").order_by("-created_at")
+        ).prefetch_related(
+            "evidence_links__evidence__invalidations__triggering_changed_file",
+            "decisions",
+        ).order_by("-created_at")
         repository_id = self.request.query_params.get("repository")
         status = self.request.query_params.get("status")
         if repository_id:
@@ -76,6 +83,27 @@ class VerificationRunViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset
 
 
+class TestExecutionViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = TestExecutionSerializer
+
+    def get_queryset(self):
+        queryset = TestExecution.objects.select_related(
+            "verification_run",
+            "commit",
+        ).order_by("-created_at")
+        repository_id = self.request.query_params.get("repository")
+        status = self.request.query_params.get("status")
+        if repository_id:
+            queryset = queryset.filter(
+                verification_run__verification__requirement__repository_id=(
+                    repository_id
+                ),
+            )
+        if status:
+            queryset = queryset.filter(status=status)
+        return queryset
+
+
 class DeliveryDecisionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DeliveryDecisionSerializer
 
@@ -84,6 +112,9 @@ class DeliveryDecisionViewSet(viewsets.ReadOnlyModelViewSet):
             "verification",
             "verification__requirement",
             "verification__pull_request",
+        ).prefetch_related(
+            "verification__evidence_links",
+            "verification__decisions",
         ).order_by("-decided_at")
         repository_id = self.request.query_params.get("repository")
         status = self.request.query_params.get("status")

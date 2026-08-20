@@ -1,3 +1,6 @@
+from django.conf import settings
+from datetime import timedelta
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -12,6 +15,11 @@ from ACI_backend.ACIApp.models import (
     VerificationEvidence,
     VerificationRun,
 )
+from ACI_backend.integrations.verification.criteria import execute_criteria
+from ACI_backend.integrations.verification.decisions import (
+    create_delivery_decision,
+)
+from ACI_backend.integrations.verification.execution import execute_test_run
 
 
 FINAL_VERIFICATION_STATUSES = {
@@ -21,9 +29,122 @@ FINAL_VERIFICATION_STATUSES = {
     "failed",
 }
 
+DEFAULT_GITHUB_TEST_CONTEXTS = {
+    "test",
+    "tests",
+    "pytest",
+    "unit",
+    "unit-tests",
+}
+DEFAULT_GITHUB_CI_CONTEXTS = {
+    "build",
+    "ci",
+    "lint",
+    "codeql",
+    "security",
+}
 
-def evaluate_reverification_evidence(*, requirement, pull_request):
-    """Return an explainable verification conclusion from fresh evidence.
+
+def classify_github_context(context):
+    """Map a GitHub check/status context to an evidence type explicitly."""
+
+    normalized = (context or "").strip().lower()
+    test_contexts = {
+        item.strip().lower()
+        for item in getattr(
+            settings,
+            "GITHUB_TEST_EVIDENCE_CONTEXTS",
+            DEFAULT_GITHUB_TEST_CONTEXTS,
+        )
+    }
+    ci_contexts = {
+        item.strip().lower()
+        for item in getattr(
+            settings,
+            "GITHUB_CI_EVIDENCE_CONTEXTS",
+            DEFAULT_GITHUB_CI_CONTEXTS,
+        )
+    }
+    if normalized in test_contexts:
+        return "test"
+    if normalized in ci_contexts:
+        return "ci"
+    return None
+
+
+def validate_evaluator_conclusion(*, requirement, evidence, conclusion):
+    """Validate an evaluator result before it can affect durable state."""
+
+    required_fields = {"status", "summary", "confidence", "evidence"}
+    missing_fields = required_fields - set(conclusion)
+    if missing_fields:
+        raise ValueError(
+            "Evaluator conclusion is missing: "
+            + ", ".join(sorted(missing_fields))
+        )
+
+    if conclusion["status"] not in FINAL_VERIFICATION_STATUSES:
+        raise ValueError("Evaluator returned an invalid status.")
+    confidence = conclusion["confidence"]
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise ValueError("Evaluator confidence must be numeric.")
+    if not 0 <= confidence <= 1:
+        raise ValueError("Evaluator confidence must be between 0 and 1.")
+    if not isinstance(conclusion["summary"], str):
+        raise ValueError("Evaluator summary must be a string.")
+    if not isinstance(conclusion["evidence"], (list, tuple)):
+        raise ValueError("Evaluator evidence must be a list.")
+
+    supplied_evidence = {item.pk: item for item in evidence}
+    for item in conclusion["evidence"]:
+        if item.pk not in supplied_evidence:
+            raise ValueError("Evaluator referenced evidence outside its input.")
+        if item.requirement_id != requirement.pk:
+            raise ValueError("Evaluator evidence belongs to another requirement.")
+        if item.status == "stale":
+            raise ValueError("Evaluator cannot reference stale evidence.")
+        if item.status == "invalid" and conclusion["status"] != "failed":
+            raise ValueError(
+                "Invalid evidence may only support a failed conclusion."
+            )
+
+    return conclusion
+
+
+def evaluate(requirement, evidence):
+    """Evaluate supplied evidence through ACI's stable evaluator contract."""
+
+    evidence = list(evidence)
+    pull_request = next(
+        (item.pull_request for item in evidence if item.pull_request_id),
+        None,
+    )
+    if pull_request is None:
+        conclusion = {
+            "status": "unverified",
+            "summary": "No pull request is associated with the evidence.",
+            "confidence": 0.0,
+            "evidence": [],
+        }
+        return validate_evaluator_conclusion(
+            requirement=requirement,
+            evidence=evidence,
+            conclusion=conclusion,
+        )
+    conclusion = _evaluate_evidence(
+        requirement=requirement,
+        pull_request=pull_request,
+        evidence=evidence,
+    )
+    return validate_evaluator_conclusion(
+        requirement=requirement,
+        evidence=evidence,
+        conclusion=conclusion,
+    )
+
+
+def _evaluate_evidence(*, requirement, pull_request, evidence):
+    """Apply the deterministic policy to an evidence collection.
 
     This baseline policy only makes a strong conclusion when the requirement
     has valid code, test, and CI evidence for the pull request. It is a
@@ -32,14 +153,30 @@ def evaluate_reverification_evidence(*, requirement, pull_request):
     completion lifecycle.
     """
 
-    evidence = list(
-        Evidence.objects.filter(
-            requirement=requirement,
-            pull_request=pull_request,
-            status="valid",
-        ).order_by("id")
-    )
-    evidence_types = {item.evidence_type for item in evidence}
+    evidence = list(evidence)
+    valid_evidence = [item for item in evidence if item.status == "valid"]
+    failed_evidence = [
+        item
+        for item in evidence
+        if (
+            item.status == "invalid"
+            and item.evidence_type in {"test", "ci"}
+            and item.metadata.get("source") == "github"
+            and item.metadata.get("head_sha") == pull_request.head_sha
+        )
+    ]
+    evidence_types = {item.evidence_type for item in valid_evidence}
+
+    if failed_evidence:
+        return {
+            "status": "failed",
+            "summary": (
+                f"A test or CI check failed for the current head of PR "
+                f"#{pull_request.number}."
+            ),
+            "confidence": 0.0,
+            "evidence": valid_evidence + failed_evidence,
+        }
 
     if "code" not in evidence_types:
         return {
@@ -49,7 +186,7 @@ def evaluate_reverification_evidence(*, requirement, pull_request):
                 f"#{pull_request.number}."
             ),
             "confidence": 0.0,
-            "evidence": evidence,
+            "evidence": valid_evidence,
         }
 
     required_types = {"code", "test", "ci"}
@@ -69,7 +206,7 @@ def evaluate_reverification_evidence(*, requirement, pull_request):
                 f"#{pull_request.number}. Missing valid {missing} evidence."
             ),
             "confidence": 0.5,
-            "evidence": evidence,
+            "evidence": valid_evidence,
         }
 
     return {
@@ -79,8 +216,23 @@ def evaluate_reverification_evidence(*, requirement, pull_request):
             "evidence for this requirement."
         ),
         "confidence": 0.9,
-        "evidence": evidence,
+        "evidence": valid_evidence,
     }
+
+
+def evaluate_reverification_evidence(*, requirement, pull_request):
+    """Evaluate current persisted evidence for a requirement and pull request."""
+
+    evidence = Evidence.objects.filter(
+        requirement=requirement,
+        pull_request=pull_request,
+        status__in=["valid", "invalid"],
+    ).order_by("id")
+    return _evaluate_evidence(
+        requirement=requirement,
+        pull_request=pull_request,
+        evidence=evidence,
+    )
 
 
 def ingest_changed_file_evidence(
@@ -106,7 +258,7 @@ def ingest_changed_file_evidence(
     evidence_records = []
 
     for changed_file in changed_files:
-        evidence, _ = Evidence.objects.update_or_create(
+        evidence, created = Evidence.objects.get_or_create(
             requirement=requirement,
             pull_request=pull_request,
             commit=changed_file.commit,
@@ -114,10 +266,7 @@ def ingest_changed_file_evidence(
             evidence_type="code",
             defaults={
                 "status": "valid",
-                "description": (
-                    f"Changed file: "
-                    f"{changed_file.filename}"
-                ),
+                "description": f"Changed file: {changed_file.filename}",
                 "metadata": {
                     "filename": changed_file.filename,
                     "status": changed_file.status,
@@ -127,6 +276,17 @@ def ingest_changed_file_evidence(
                 },
             },
         )
+
+        if not created and evidence.status == "valid":
+            evidence.description = f"Changed file: {changed_file.filename}"
+            evidence.metadata = {
+                "filename": changed_file.filename,
+                "status": changed_file.status,
+                "additions": changed_file.additions,
+                "deletions": changed_file.deletions,
+                "changes": changed_file.changes,
+            }
+            evidence.save(update_fields=["description", "metadata", "updated_at"])
 
         evidence_records.append(evidence)
 
@@ -139,9 +299,9 @@ def ingest_github_evidence(*, pull_request, commit, event, payload):
     if event == "check_run":
         check_run = payload["check_run"]
         name = check_run.get("name", "")
-        evidence_type = "test" if name.lower().startswith(
-            ("test", "pytest", "unit")
-        ) else "ci"
+        evidence_type = classify_github_context(name)
+        if evidence_type is None:
+            return []
         external_key = f"check_run:{name}"
         conclusion = check_run.get("conclusion") or check_run.get("status", "")
         evidence_status = "valid" if conclusion == "success" else "invalid"
@@ -161,9 +321,9 @@ def ingest_github_evidence(*, pull_request, commit, event, payload):
         external_key = f"status:{context}"
         state = payload.get("state", "")
         evidence_status = "valid" if state == "success" else "invalid"
-        evidence_type = "test" if any(
-            marker in context.lower() for marker in ("test", "pytest", "unit")
-        ) else "ci"
+        evidence_type = classify_github_context(context)
+        if evidence_type is None:
+            return []
         description = f"GitHub status {context} is {state}."
         metadata = {
             "source": "github",
@@ -382,6 +542,43 @@ def claim_reverification_run(*, run_id):
 
 
 @transaction.atomic
+def recover_stuck_reverification_runs(*, timeout=timedelta(hours=1), now=None):
+    """Fail runs left running after a worker stopped responding."""
+
+    now = now or timezone.now()
+    cutoff = now - timeout
+    stuck_runs = list(
+        VerificationRun.objects.select_for_update().filter(
+            status="running",
+            started_at__isnull=False,
+            started_at__lt=cutoff,
+        ).select_related("verification")
+    )
+
+    for run in stuck_runs:
+        verification = run.verification
+        summary = (
+            "Re-verification worker did not complete within the allowed "
+            "time window."
+        )
+        verification.status = "failed"
+        verification.summary = summary
+        verification.save(update_fields=["status", "summary"])
+        DeliveryDecision.objects.filter(
+            verification=verification,
+            is_current=True,
+        ).exclude(status="stale").update(
+            status="stale",
+            invalidated_at=now,
+        )
+        run.status = "failed"
+        run.completed_at = now
+        run.save(update_fields=["status", "completed_at"])
+
+    return stuck_runs
+
+
+@transaction.atomic
 def complete_reverification_run(
     *,
     run_id,
@@ -422,6 +619,17 @@ def complete_reverification_run(
         raise ValueError(
             "Re-verification evidence must belong to the same requirement."
         )
+    if confidence is not None:
+        validate_evaluator_conclusion(
+            requirement=verification.requirement,
+            evidence=evidence,
+            conclusion={
+                "status": status,
+                "summary": summary,
+                "confidence": confidence,
+                "evidence": evidence,
+            },
+        )
 
     for evidence_item in evidence:
         VerificationEvidence.objects.get_or_create(
@@ -451,7 +659,7 @@ def complete_reverification_run(
     return verification
 
 
-def process_next_reverification_run():
+def process_next_reverification_run(*, evaluator=None, test_runner=None):
     """Process the oldest queued run using ACI's conservative baseline.
 
     This is intentionally not an AI evaluator. It collects fresh code evidence
@@ -487,11 +695,38 @@ def process_next_reverification_run():
         requirement=verification.requirement,
         pull_request=pull_request,
     )
-    conclusion = evaluate_reverification_evidence(
+    if test_runner is not None:
+        execute_test_run(
+            verification_run=run,
+            runner=test_runner,
+        )
+    current_evidence = Evidence.objects.filter(
         requirement=verification.requirement,
         pull_request=pull_request,
+        status__in=["valid", "invalid"],
+    ).order_by("id")
+    if evaluator is None:
+        conclusion = evaluate(
+            verification.requirement,
+            current_evidence,
+        )
+    else:
+        conclusion = evaluator.evaluate(
+            verification.requirement,
+            current_evidence,
+        )
+        validate_evaluator_conclusion(
+            requirement=verification.requirement,
+            evidence=current_evidence,
+            conclusion=conclusion,
+        )
+    execute_criteria(
+        verification=verification,
+        evidence=current_evidence,
     )
-    return complete_reverification_run(
+    verification = complete_reverification_run(
         run_id=run.id,
         **conclusion,
     )
+    create_delivery_decision(verification=verification)
+    return verification

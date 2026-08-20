@@ -1,11 +1,14 @@
 """Deterministic persistence helpers for requirement verification criteria."""
 
+from fnmatch import fnmatch
+
 from django.db import transaction
 from django.db.models import Max
 
 from ACI_backend.ACIApp.models import (
     CriterionVerification,
     CriterionVerificationEvidence,
+    Evidence,
     RequirementCriterion,
     VerificationEvidence,
 )
@@ -19,6 +22,105 @@ CRITERION_VERIFICATION_STATUSES = {
     "not_applicable",
     "failed",
 }
+
+
+DEFAULT_EVIDENCE_TYPES = {
+    "behavior": {"code", "runtime", "test"},
+    "implementation": {"code"},
+    "test": {"test"},
+    "integration": {"code", "test", "ci"},
+    "data": {"code", "test"},
+    "security": {"code", "test", "ci"},
+    "configuration": {"code", "ci"},
+}
+
+
+def _expected_evidence_types(criterion):
+    expectations = criterion.expectations or {}
+    expected_types = expectations.get("evidence_types")
+    if expected_types is None and expectations.get("evidence_type"):
+        expected_types = [expectations["evidence_type"]]
+    if isinstance(expected_types, str):
+        expected_types = [expected_types]
+    return set(expected_types or DEFAULT_EVIDENCE_TYPES.get(
+        criterion.category,
+        {"code"},
+    ))
+
+
+def _matching_evidence(*, criterion, evidence):
+    expectations = criterion.expectations or {}
+    expected_types = _expected_evidence_types(criterion)
+    path_patterns = expectations.get("path_patterns", [])
+
+    matches = []
+    for evidence_item in evidence:
+        if evidence_item.evidence_type not in expected_types:
+            continue
+        if path_patterns:
+            filename = (
+                evidence_item.changed_file.filename
+                if evidence_item.changed_file_id
+                else evidence_item.metadata.get("filename", "")
+            )
+            if not any(fnmatch(filename, pattern) for pattern in path_patterns):
+                continue
+        matches.append(evidence_item)
+    return matches
+
+
+@transaction.atomic
+def execute_criteria(*, verification, evidence=None):
+    """Evaluate every active criterion against the supplied evidence."""
+
+    if evidence is None:
+        evidence = Evidence.objects.filter(
+            requirement=verification.requirement,
+            pull_request=verification.pull_request,
+            status__in=["valid", "invalid"],
+        ).select_related("changed_file")
+    evidence = list(evidence)
+    results = []
+
+    for criterion in list_active_criteria(requirement=verification.requirement):
+        valid_evidence = _matching_evidence(
+            criterion=criterion,
+            evidence=[item for item in evidence if item.status == "valid"],
+        )
+        invalid_evidence = _matching_evidence(
+            criterion=criterion,
+            evidence=[item for item in evidence if item.status == "invalid"],
+        )
+        if valid_evidence:
+            status = "satisfied"
+            summary = "Matching valid evidence was collected."
+            confidence = 1.0
+            supporting_evidence = valid_evidence
+        elif invalid_evidence:
+            status = "failed"
+            summary = "Matching evidence was collected but is invalid."
+            confidence = 0.0
+            supporting_evidence = invalid_evidence
+        else:
+            status = "missing"
+            summary = "No matching evidence was collected."
+            confidence = 0.0
+            supporting_evidence = []
+
+        results.append(record_criterion_verification(
+            verification=verification,
+            criterion=criterion,
+            status=status,
+            summary=summary,
+            confidence=confidence,
+            metadata={
+                "evidence_types": sorted(
+                    _expected_evidence_types(criterion),
+                ),
+            },
+            evidence=supporting_evidence,
+        ))
+    return results
 
 
 @transaction.atomic

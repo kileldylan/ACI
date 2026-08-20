@@ -633,3 +633,55 @@ class VerificationRun(models.Model):
 
     def __str__(self):
         return f"Verification {self.verification_id} - {self.status}"
+
+
+class TestExecution(models.Model):
+    """A test command executed as part of a verification run."""
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("running", "Running"),
+        ("passed", "Passed"),
+        ("failed", "Failed"),
+        ("timed_out", "Timed Out"),
+        ("error", "Error"),
+    ]
+
+    verification_run = models.ForeignKey(
+        VerificationRun,
+        on_delete=models.CASCADE,
+        related_name="test_executions",
+    )
+
+    commit = models.ForeignKey(
+        Commit,
+        on_delete=models.SET_NULL,
+        related_name="test_executions",
+        null=True,
+        blank=True,
+    )
+
+    command = models.JSONField(default=list)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="pending",
+    )
+    exit_code = models.IntegerField(null=True, blank=True)
+    stdout = models.TextField(blank=True)
+    stderr = models.TextField(blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["verification_run", "status"]),
+            models.Index(fields=["commit", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Test execution {self.pk} - {self.status}"

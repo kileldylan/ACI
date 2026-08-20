@@ -5,7 +5,9 @@ from rest_framework.test import APIClient
 from ACI_backend.ACIApp.models import (
     ChangedFile,
     Commit,
+    DeliveryDecision,
     Evidence,
+    EvidenceInvalidation,
     PullRequest,
     Repository,
     Requirement,
@@ -74,10 +76,21 @@ def test_verification_api_exposes_stale_proof_and_queued_work():
         verification=verification,
         evidence=evidence,
     )
+    EvidenceInvalidation.objects.create(
+        evidence=evidence,
+        triggering_changed_file=changed_file,
+        reason="A newer revision changed auth/service.py.",
+    )
     run = VerificationRun.objects.create(
         verification=verification,
         triggering_changed_file=changed_file,
         reason="PR #517 changed auth/service.py.",
+    )
+    decision = DeliveryDecision.objects.create(
+        verification=verification,
+        status="stale",
+        summary="The verification is stale.",
+        rationale={"stale_evidence_ids": [evidence.id]},
     )
 
     client = APIClient()
@@ -97,10 +110,29 @@ def test_verification_api_exposes_stale_proof_and_queued_work():
     assert verification_response.status_code == 200
     assert verification_response.json()[0]["id"] == verification.id
     assert verification_response.json()[0]["evidence_ids"] == [evidence.id]
+    assert verification_response.json()[0]["evidence"][0]["commit_sha"] == (
+        commit.sha
+    )
+    assert verification_response.json()[0]["decision_history"][0]["id"] == (
+        decision.id
+    )
 
     assert evidence_response.status_code == 200
     assert evidence_response.json()[0]["id"] == evidence.id
+    assert evidence_response.json()[0]["invalidation_history"][0]["reason"] == (
+        "A newer revision changed auth/service.py."
+    )
 
     assert run_response.status_code == 200
     assert run_response.json()[0]["id"] == run.id
     assert run_response.json()[0]["verification"] == verification.id
+
+    decision_response = client.get(
+        reverse("delivery-decision-list"),
+        {"repository": repository.id},
+    )
+    assert decision_response.status_code == 200
+    assert decision_response.json()[0]["id"] == decision.id
+    assert decision_response.json()[0]["verification_status"] == "stale"
+    assert decision_response.json()[0]["evidence_ids"] == [evidence.id]
+    assert decision_response.json()[0]["decision_history"][0]["id"] == decision.id

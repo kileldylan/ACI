@@ -22,7 +22,11 @@ def process_pull_request_event(payload):
     then retrieves and persists the PR commits.
     """
 
-    repository_data = payload["repository"]
+    if not isinstance(payload, dict):
+        return []
+    repository_data = payload.get("repository")
+    if not isinstance(repository_data, dict) or "id" not in repository_data:
+        return []
     pull_request_data = payload["pull_request"]
 
     # ---------------------------------------------------------
@@ -142,9 +146,16 @@ def process_github_evidence_event(event, payload):
     """Ingest a GitHub check or status event for linked requirements."""
 
     repository_data = payload["repository"]
-    repository = Repository.objects.get(github_id=repository_data["id"])
+    repository = Repository.objects.filter(
+        github_id=repository_data["id"],
+    ).first()
+    if repository is None:
+        return []
     if event == "check_run":
-        sha = payload.get("check_run", {}).get("head_sha")
+        check_run = payload.get("check_run")
+        if not isinstance(check_run, dict):
+            return []
+        sha = check_run.get("head_sha")
     else:
         sha = payload.get("sha")
     if not sha:
@@ -156,11 +167,23 @@ def process_github_evidence_event(event, payload):
         if pull_requests:
             pull_request_number = pull_requests[0].get("number")
 
-    lookup = {"number": pull_request_number} if pull_request_number else {"head_sha": sha}
-    pull_request = PullRequest.objects.filter(
-        repository=repository,
-        **lookup,
-    ).first()
+    if pull_request_number:
+        pull_request = PullRequest.objects.filter(
+            repository=repository,
+            number=pull_request_number,
+        ).first()
+    else:
+        pull_request = PullRequest.objects.filter(
+            repository=repository,
+            head_sha=sha,
+        ).first()
+        if pull_request is None:
+            commit = Commit.objects.filter(
+                repository=repository,
+                sha=sha,
+                pull_request__isnull=False,
+            ).select_related("pull_request").first()
+            pull_request = commit.pull_request if commit else None
     if pull_request is None:
         return []
 
