@@ -1,8 +1,4 @@
-from ACI_backend.ACIApp.models import (
-    PullRequest,
-    Requirement,
-    RequirementPullRequest,
-)
+from ACI_backend.ACIApp.models import Requirement, RequirementPullRequest
 from ACI_backend.integrations.jira.utils import extract_jira_issue_keys
 
 

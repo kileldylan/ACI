@@ -39,38 +39,82 @@ class PytestRunner:
         self.timeout = timeout
 
     def run(self):
-        started = time.monotonic()
-        try:
-            completed = subprocess.run(
-                self.command,
-                cwd=self.workspace,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            return TestExecutionResult(
-                status="timed_out",
-                stdout=_decode_output(error.stdout),
-                stderr=_decode_output(error.stderr),
-                duration_ms=_duration_ms(started),
-                metadata={"timeout_seconds": self.timeout},
-            )
-        except OSError as error:
-            return TestExecutionResult(
-                status="error",
-                stderr=str(error),
-                duration_ms=_duration_ms(started),
-            )
+        return _run_command(
+            command=self.command,
+            workspace=self.workspace,
+            timeout=self.timeout,
+        )
 
+
+class DockerPytestRunner:
+    """Run pytest in a constrained, network-isolated Docker container."""
+
+    def __init__(self, *, workspace, image, timeout=300):
+        self.workspace = Path(workspace).resolve()
+        self.timeout = timeout
+        self.command = [
+            "docker",
+            "run",
+            "--rm",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--pids-limit=256",
+            "--memory=1g",
+            "--cpus=2",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=512m",
+            "--volume",
+            f"{self.workspace}:/workspace:ro",
+            "--workdir",
+            "/workspace",
+            image,
+            "pytest",
+            "-q",
+        ]
+
+    def run(self):
+        return _run_command(
+            command=self.command,
+            workspace=self.workspace,
+            timeout=self.timeout,
+        )
+
+
+def _run_command(*, command, workspace, timeout):
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
         return TestExecutionResult(
-            status="passed" if completed.returncode == 0 else "failed",
-            exit_code=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            status="timed_out",
+            stdout=_decode_output(error.stdout),
+            stderr=_decode_output(error.stderr),
+            duration_ms=_duration_ms(started),
+            metadata={"timeout_seconds": timeout},
+        )
+    except OSError as error:
+        return TestExecutionResult(
+            status="error",
+            stderr=str(error),
             duration_ms=_duration_ms(started),
         )
+
+    return TestExecutionResult(
+        status="passed" if completed.returncode == 0 else "failed",
+        exit_code=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        duration_ms=_duration_ms(started),
+    )
 
 
 def _decode_output(output):

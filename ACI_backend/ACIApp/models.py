@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 class Repository(models.Model):
@@ -19,6 +20,12 @@ class Repository(models.Model):
     )
 
     is_active = models.BooleanField(default=True)
+
+    members = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name="aci_repositories",
+        blank=True,
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

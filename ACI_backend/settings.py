@@ -23,6 +23,17 @@ environ.Env.read_env(BASE_DIR / ".env")
 
 GITHUB_WEBHOOK_SECRET = env("GITHUB_WEBHOOK_SECRET")
 GITHUB_ACCESS_TOKEN = env("GITHUB_ACCESS_TOKEN")
+GITHUB_API_TIMEOUT = env.int("GITHUB_API_TIMEOUT", default=15)
+JIRA_BASE_URL = env("JIRA_BASE_URL", default="").rstrip("/")
+JIRA_EMAIL = env("JIRA_EMAIL", default="")
+JIRA_API_TOKEN = env("JIRA_API_TOKEN", default="")
+JIRA_API_TIMEOUT = env.int("JIRA_API_TIMEOUT", default=15)
+ACI_ENABLE_TEST_EXECUTION = env.bool(
+    "ACI_ENABLE_TEST_EXECUTION",
+    default=False,
+)
+ACI_TEST_WORKSPACE = env("ACI_TEST_WORKSPACE", default="")
+ACI_TEST_DOCKER_IMAGE = env("ACI_TEST_DOCKER_IMAGE", default="")
 GITHUB_TEST_EVIDENCE_CONTEXTS = tuple(
     context.strip()
     for context in env(
@@ -178,6 +189,6 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.AllowAny",
+        "rest_framework.permissions.IsAuthenticated",
     ],
 }

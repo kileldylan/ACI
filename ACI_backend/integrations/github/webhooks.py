@@ -11,6 +11,9 @@ from ACI_backend.integrations.github.service import (
     process_pull_request_event,
 )
 
+PULL_REQUEST_ACTIONS = {"opened", "reopened", "synchronize", "closed"}
+CHECK_RUN_ACTIONS = {"created", "rerequested", "completed"}
+
 
 @csrf_exempt
 def github_webhook(request):
@@ -26,8 +29,14 @@ def github_webhook(request):
     if not signature or not signature.startswith("sha256="):
         return JsonResponse({"detail": "Invalid webhook signature."}, status=401)
 
+    webhook_secret = getattr(settings, "GITHUB_WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        return JsonResponse(
+            {"detail": "Webhook secret is not configured."},
+            status=503,
+        )
     expected = "sha256=" + hmac.new(
-        settings.GITHUB_WEBHOOK_SECRET.encode(), request.body, hashlib.sha256
+        webhook_secret.encode(), request.body, hashlib.sha256
     ).hexdigest()
 
     if not hmac.compare_digest(signature, expected):
@@ -39,10 +48,40 @@ def github_webhook(request):
         return JsonResponse({"detail": "Invalid JSON payload."}, status=400)
 
     event = request.headers.get("X-GitHub-Event")
-    if event == "pull_request" and isinstance(payload, dict) and "repository" in payload and "pull_request" in payload:
-        # delegate full processing (including commits) to the service layer
-        process_pull_request_event(payload)
-    elif event in {"check_run", "status"} and isinstance(payload, dict) and "repository" in payload:
-        process_github_evidence_event(event, payload)
+    if not isinstance(payload, dict) or not event:
+        return JsonResponse({"detail": "Invalid webhook payload."}, status=400)
+
+    try:
+        if event == "pull_request":
+            if not isinstance(payload.get("repository"), dict):
+                return JsonResponse({"detail": "Invalid pull request payload."}, status=400)
+            if not isinstance(payload.get("pull_request"), dict):
+                return JsonResponse({"detail": "Invalid pull request payload."}, status=400)
+            if payload.get("action") not in PULL_REQUEST_ACTIONS:
+                return JsonResponse(
+                    {"message": "Webhook action ignored.", "event": event},
+                    status=202,
+                )
+            process_pull_request_event(payload)
+        elif event == "check_run":
+            if not isinstance(payload.get("repository"), dict):
+                return JsonResponse({"detail": "Invalid check run payload."}, status=400)
+            if payload.get("action") not in CHECK_RUN_ACTIONS:
+                return JsonResponse(
+                    {"message": "Webhook action ignored.", "event": event},
+                    status=202,
+                )
+            process_github_evidence_event(event, payload)
+        elif event == "status":
+            if not isinstance(payload.get("repository"), dict):
+                return JsonResponse({"detail": "Invalid status payload."}, status=400)
+            process_github_evidence_event(event, payload)
+        else:
+            return JsonResponse(
+                {"message": "Webhook event ignored.", "event": event},
+                status=202,
+            )
+    except (KeyError, TypeError, ValueError):
+        return JsonResponse({"detail": "Invalid webhook payload."}, status=400)
 
     return JsonResponse({"message": "Webhook received.", "event": event}, status=200)

@@ -1,3 +1,6 @@
+import logging
+
+from django.conf import settings
 from django.db import transaction
 
 from ACI_backend.ACIApp.models import (
@@ -7,10 +10,47 @@ from ACI_backend.ACIApp.models import (
     Repository,
 )
 from ACI_backend.integrations.github.client import GitHubClient
+from ACI_backend.integrations.jira.client import JiraAPIError, JiraClient
+from ACI_backend.integrations.jira.service import (
+    ingest_jira_requirements_for_pull_request,
+)
 from ACI_backend.integrations.verification.service import (
     invalidate_evidence_for_changed_file,
     ingest_github_evidence,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+def ingest_jira_links_for_pull_request(*, pull_request, payload):
+    """Link Jira requirements referenced by a PR when Jira is configured."""
+
+    if not settings.JIRA_BASE_URL or not settings.JIRA_API_TOKEN:
+        return []
+    pull_request_data = payload.get("pull_request", {})
+    text = "\n".join(
+        value
+        for value in (
+            pull_request_data.get("title", ""),
+            pull_request_data.get("body", "") or "",
+        )
+        if isinstance(value, str)
+    )
+    if not text.strip():
+        return []
+    try:
+        return ingest_jira_requirements_for_pull_request(
+            pull_request=pull_request,
+            text=text,
+            jira_client=JiraClient(),
+        )
+    except JiraAPIError:
+        logger.exception(
+            "Jira requirement ingestion failed for %s",
+            pull_request,
+        )
+        return []
 
 
 @transaction.atomic
@@ -65,11 +105,16 @@ def process_pull_request_event(payload):
         },
     )
 
+    ingest_jira_links_for_pull_request(
+        pull_request=pull_request,
+        payload=payload,
+    )
+
     # ---------------------------------------------------------
     # 3. Retrieve commits from GitHub
     # ---------------------------------------------------------
 
-    github_client = GitHubClient()
+    github_client = GitHubClient(token=settings.GITHUB_ACCESS_TOKEN)
 
     commits = github_client.get_pull_request_commits(
         owner=repository.owner,

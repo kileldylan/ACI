@@ -31,7 +31,7 @@ def create_github_signature(payload):
 @pytest.mark.django_db
 def test_github_webhook_accepts_valid_signature(api_client):
     payload = {
-        "action": "opened",
+        "zen": "Keep it logically awesome.",
     }
 
     signature, body = create_github_signature(payload)
@@ -40,15 +40,15 @@ def test_github_webhook_accepts_valid_signature(api_client):
         reverse("github-webhook"),
         data=body,
         content_type="application/json",
-        HTTP_X_GITHUB_EVENT="pull_request",
+        HTTP_X_GITHUB_EVENT="ping",
         HTTP_X_HUB_SIGNATURE_256=signature,
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
 
     assert response.json() == {
-        "message": "Webhook received.",
-        "event": "pull_request",
+        "message": "Webhook event ignored.",
+        "event": "ping",
     }
 
 

@@ -1,4 +1,5 @@
 import pytest
+from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -17,14 +18,81 @@ from ACI_backend.ACIApp.models import (
 )
 
 
+def test_api_requires_authentication():
+    response = APIClient().get(reverse("repository-list"))
+
+    assert response.status_code in {401, 403}
+
+
+@pytest.mark.django_db
+def test_repository_creator_is_added_as_member():
+    user = get_user_model().objects.create_user(
+        username="repository-owner",
+        password="test-password",
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post(
+        reverse("repository-list"),
+        {
+            "github_id": 987001,
+            "owner": "aci",
+            "name": "owned-repository",
+            "full_name": "aci/owned-repository",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    repository = Repository.objects.get(full_name="aci/owned-repository")
+    assert repository.members.filter(pk=user.pk).exists()
+
+
+@pytest.mark.django_db
+def test_user_cannot_read_another_repository():
+    user = get_user_model().objects.create_user(
+        username="repository-reader",
+        password="test-password",
+    )
+    visible = Repository.objects.create(
+        github_id=987002,
+        owner="aci",
+        name="visible",
+        full_name="aci/visible",
+    )
+    hidden = Repository.objects.create(
+        github_id=987003,
+        owner="aci",
+        name="hidden",
+        full_name="aci/hidden",
+    )
+    visible.members.add(user)
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    list_response = client.get(reverse("repository-list"))
+    hidden_response = client.get(
+        reverse("repository-detail", kwargs={"pk": hidden.pk}),
+    )
+
+    assert [item["id"] for item in list_response.json()] == [visible.id]
+    assert hidden_response.status_code == 404
+
+
 @pytest.mark.django_db
 def test_verification_api_exposes_stale_proof_and_queued_work():
     repository = Repository.objects.create(
         github_id=123456,
         owner="kilel",
         name="aci-demo",
-        full_name="kilel/aci-demo",
+        full_name="aci-demo",
     )
+    user = get_user_model().objects.create_user(
+        username="verification-reader",
+        password="test-password",
+    )
+    repository.members.add(user)
     pull_request = PullRequest.objects.create(
         repository=repository,
         github_id=987654,
@@ -94,6 +162,7 @@ def test_verification_api_exposes_stale_proof_and_queued_work():
     )
 
     client = APIClient()
+    client.force_authenticate(user=user)
     verification_response = client.get(
         reverse("verification-list"),
         {"repository": repository.id, "status": "stale"},

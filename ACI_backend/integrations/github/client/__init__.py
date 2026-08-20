@@ -1,6 +1,8 @@
 import json
 import requests
 
+from django.conf import settings
+
 class GitHubAPIError(Exception):
     """Raised when a GitHub API request fails."""
 
@@ -8,8 +10,9 @@ class GitHubAPIError(Exception):
 class GitHubClient:
     BASE_URL = "https://api.github.com"
 
-    def __init__(self, token=None):
+    def __init__(self, token=None, *, timeout=None):
         self.token = token
+        self.timeout = timeout or settings.GITHUB_API_TIMEOUT
         self.session = requests.Session()
 
     def _request(self, endpoint):
@@ -23,7 +26,11 @@ class GitHubClient:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
 
-        response = self.session.get(url, headers=headers)
+        response = self.session.get(
+            url,
+            headers=headers,
+            timeout=self.timeout,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -32,6 +39,4 @@ class GitHubClient:
 
     def get_pull_request_commits(self, owner, repository, pull_request_number):
         endpoint = f"/repos/{owner}/{repository}/pulls/{pull_request_number}/commits"
-        response = self.session.get(f"{self.BASE_URL}{endpoint}")
-        response.raise_for_status()
-        return response.json()
+        return self._request(endpoint)

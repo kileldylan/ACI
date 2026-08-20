@@ -41,6 +41,7 @@ class RepositorySerializer(serializers.ModelSerializer):
             "full_name",
             "default_branch",
             "is_active",
+            "members",
             "created_at",
             "updated_at",
         ]
@@ -49,6 +50,7 @@ class RepositorySerializer(serializers.ModelSerializer):
             "id",
             "created_at",
             "updated_at",
+            "members",
         ]
 
 

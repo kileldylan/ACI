@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -12,6 +12,7 @@ from ACI_backend.integrations.jira.service import (
     ingest_jira_requirement,
     ingest_jira_requirements_for_pull_request,
 )
+from ACI_backend.integrations.jira.client import JiraClient
 from ACI_backend.integrations.jira.utils import (
     extract_jira_issue_keys,
 )
@@ -109,6 +110,29 @@ def test_extract_jira_issue_keys_returns_empty_for_no_match():
     result = extract_jira_issue_keys(text)
 
     assert result == []
+
+
+def test_jira_client_fetches_issue_with_timeout_and_basic_auth():
+    response = Mock()
+    response.json.return_value = {"key": "PROJ-123", "fields": {}}
+    response.raise_for_status.return_value = None
+    client = JiraClient(
+        base_url="https://example.atlassian.net",
+        email="aci@example.com",
+        api_token="test-token",
+        timeout=7,
+    )
+
+    with patch.object(client.session, "get", return_value=response) as get:
+        issue = client.get_issue("PROJ-123")
+
+    assert issue["key"] == "PROJ-123"
+    get.assert_called_once_with(
+        "https://example.atlassian.net/rest/api/3/issue/PROJ-123",
+        auth=("aci@example.com", "test-token"),
+        headers={"Accept": "application/json"},
+        timeout=7,
+    )
 
 
 @pytest.mark.django_db

@@ -1,9 +1,13 @@
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 
 from ACI_backend.integrations.verification.llm import create_openai_evaluator
 from ACI_backend.integrations.verification.service import (
     process_next_reverification_run,
     recover_stuck_reverification_runs,
+)
+from ACI_backend.integrations.verification.execution import (
+    DockerPytestRunner,
 )
 
 
@@ -28,11 +32,28 @@ class Command(BaseCommand):
         evaluator = None
         if options["evaluator"] == "openai":
             evaluator = create_openai_evaluator()
+        test_runner = None
+        if settings.ACI_ENABLE_TEST_EXECUTION:
+            if not settings.ACI_TEST_WORKSPACE:
+                raise CommandError(
+                    "ACI_TEST_WORKSPACE is required when test execution is enabled."
+                )
+            if not settings.ACI_TEST_DOCKER_IMAGE:
+                raise CommandError(
+                    "ACI_TEST_DOCKER_IMAGE is required for automated execution."
+                )
+            test_runner = DockerPytestRunner(
+                workspace=settings.ACI_TEST_WORKSPACE,
+                image=settings.ACI_TEST_DOCKER_IMAGE,
+            )
         processed = 0
 
         while (
             options["limit"] == 0 or processed < options["limit"]
-        ) and process_next_reverification_run(evaluator=evaluator) is not None:
+        ) and process_next_reverification_run(
+            evaluator=evaluator,
+            test_runner=test_runner,
+        ) is not None:
             processed += 1
 
         self.stdout.write(

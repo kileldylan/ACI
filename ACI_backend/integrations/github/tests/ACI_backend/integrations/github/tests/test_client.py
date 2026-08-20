@@ -39,7 +39,12 @@ def test_get_pull_request_commits():
 
     mock_get.assert_called_once_with(
         "https://api.github.com/repos/"
-        "kilel/aci-demo/pulls/1/commits"
+        "kilel/aci-demo/pulls/1/commits",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        timeout=15,
     )
 
     assert commits == github_response
