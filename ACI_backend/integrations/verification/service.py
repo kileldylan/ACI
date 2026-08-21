@@ -423,6 +423,42 @@ def create_verification(
 
 
 @transaction.atomic
+def start_initial_verification(*, requirement, pull_request):
+    """Create a verification and queue its first evidence evaluation."""
+
+    verification = create_verification(
+        requirement=requirement,
+        pull_request=pull_request,
+    )
+    active_run = VerificationRun.objects.filter(
+        verification=verification,
+        status__in=["queued", "running"],
+    ).first()
+    if active_run is not None:
+        return verification, active_run
+
+    triggering_changed_file = (
+        ChangedFile.objects.filter(
+            commit__pull_request=pull_request,
+        )
+        .select_related("commit")
+        .order_by("-commit__committed_at", "-id")
+        .first()
+    )
+    if triggering_changed_file is None:
+        raise ValueError(
+            "The pull request has no changed files to verify yet."
+        )
+
+    run = VerificationRun.objects.create(
+        verification=verification,
+        triggering_changed_file=triggering_changed_file,
+        reason=f"Initial verification for PR #{pull_request.number}.",
+    )
+    return verification, run
+
+
+@transaction.atomic
 def invalidate_evidence_for_changed_file(changed_file):
     """Invalidate prior code evidence affected by a changed file.
 

@@ -17,6 +17,7 @@ from ACI_backend.integrations.jira.service import (
 from ACI_backend.integrations.verification.service import (
     invalidate_evidence_for_changed_file,
     ingest_github_evidence,
+    start_initial_verification,
 )
 
 
@@ -152,6 +153,21 @@ def process_pull_request_event(payload):
             github_commit=github_commit,
         ):
             invalidate_evidence_for_changed_file(changed_file)
+
+    for requirement_link in pull_request.requirement_links.select_related(
+        "requirement",
+    ):
+        try:
+            start_initial_verification(
+                requirement=requirement_link.requirement,
+                pull_request=pull_request,
+            )
+        except ValueError:
+            logger.warning(
+                "Initial verification deferred for %s because no changed "
+                "file is available yet.",
+                pull_request,
+            )
 
     return pull_request
 

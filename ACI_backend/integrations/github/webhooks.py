@@ -62,7 +62,50 @@ def github_webhook(request):
                     {"message": "Webhook action ignored.", "event": event},
                     status=202,
                 )
-            process_pull_request_event(payload)
+            pull_request = process_pull_request_event(payload)
+            requirements = list(
+                pull_request.requirement_links.select_related(
+                    "requirement",
+                ).values(
+                    "requirement_id",
+                    "requirement__external_id",
+                    "requirement__title",
+                )
+            )
+            verifications = list(
+                pull_request.verifications.values(
+                    "id",
+                    "requirement_id",
+                    "status",
+                )
+            )
+            runs = list(
+                pull_request.verifications.values(
+                    "runs__id",
+                    "runs__status",
+                )
+                .exclude(runs__id__isnull=True)
+            )
+            return JsonResponse(
+                {
+                    "message": "Webhook received.",
+                    "event": event,
+                    "pull_request": {
+                        "id": pull_request.id,
+                        "number": pull_request.number,
+                        "repository": pull_request.repository.full_name,
+                    },
+                    "requirements": requirements,
+                    "verifications": verifications,
+                    "runs": runs,
+                    "analysis": (
+                        "queued; run process_reverification_runs to complete"
+                        if any(item["runs__status"] == "queued" for item in runs)
+                        else "not queued; link a Jira requirement and ensure the PR has changed files"
+                    ),
+                },
+                status=200,
+            )
         elif event == "check_run":
             if not isinstance(payload.get("repository"), dict):
                 return JsonResponse({"detail": "Invalid check run payload."}, status=400)

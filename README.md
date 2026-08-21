@@ -582,6 +582,44 @@ The GitHub integration is responsible for obtaining information such as:
 * commits
 * changed files
 
+### Running a verification
+
+Configure the GitHub webhook in each repository that ACI should monitor. Use
+the ACI endpoint `/api/webhooks/github/` and subscribe to pull request, check
+run, and commit status events.
+
+When a pull request contains a Jira key in its title or description, such as
+`PROJ-123`, ACI imports the Jira requirement and links it to the pull request.
+The webhook then queues the initial verification automatically when changed
+files are available.
+
+Existing imported data can be started through the authenticated API:
+
+```text
+GET  /api/repositories/{repository_id}/pull-requests/
+GET  /api/repositories/{repository_id}/requirements/
+POST /api/repositories/{repository_id}/start-verification/
+```
+
+The start request accepts `pull_request_id` or `pull_request_number`, plus
+`requirement_id` or `jira_key`. For example:
+
+```json
+{
+    "pull_request_number": 12,
+    "jira_key": "PROJ-123"
+}
+```
+
+Run the worker after a verification is queued:
+
+```bash
+python ACI_backend/manage.py process_reverification_runs
+```
+
+Results are available from `/api/verifications/`,
+`/api/verification-runs/`, and `/api/delivery-decisions/`.
+
 ### Jira
 
 ACI currently supports Jira requirement ingestion.
@@ -757,7 +795,7 @@ The project is currently moving toward the next stage:
 Run the complete test suite with:
 
 ```bash
-pytest
+pytest ACI_backend
 ```
 
 The project is designed so that external services such as GitHub, Jira, and LLM providers can be mocked during tests.

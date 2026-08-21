@@ -4,7 +4,9 @@ from ACI_backend.ACIApp.models import (
     DeliveryDecision,
     Evidence,
     EvidenceInvalidation,
+    PullRequest,
     Repository,
+    Requirement,
     TestExecution,
     Verification,
     VerificationRun,
@@ -52,6 +54,47 @@ class RepositorySerializer(serializers.ModelSerializer):
             "updated_at",
             "members",
         ]
+
+
+class PullRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PullRequest
+        fields = [
+            "id",
+            "repository",
+            "github_id",
+            "number",
+            "title",
+            "author",
+            "source_branch",
+            "target_branch",
+            "base_sha",
+            "head_sha",
+            "state",
+            "is_merged",
+            "created_at",
+            "updated_at",
+            "received_at",
+        ]
+        read_only_fields = fields
+
+
+class RequirementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Requirement
+        fields = [
+            "id",
+            "repository",
+            "external_id",
+            "source",
+            "title",
+            "description",
+            "url",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
 
 
 class EvidenceSerializer(serializers.ModelSerializer):

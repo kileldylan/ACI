@@ -25,9 +25,16 @@ urlpatterns = [
         "api/",
         include("ACI_backend.api.urls"),
     ),
+    # Accept both slash forms so GitHub webhooks are not 301-redirected
+    # (redirects often become GET and then hit our 405).
     path(
         "api/webhooks/github/",
         github_webhook,
         name="github-webhook",
+    ),
+    path(
+        "api/webhooks/github",
+        github_webhook,
+        name="github-webhook-no-slash",
     ),
 ]

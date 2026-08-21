@@ -12,6 +12,7 @@ from ACI_backend.ACIApp.models import (
     PullRequest,
     Repository,
     Requirement,
+    RequirementPullRequest,
     Verification,
     VerificationEvidence,
     VerificationRun,
@@ -47,6 +48,78 @@ def test_repository_creator_is_added_as_member():
     assert response.status_code == 201
     repository = Repository.objects.get(full_name="aci/owned-repository")
     assert repository.members.filter(pk=user.pk).exists()
+
+
+@pytest.mark.django_db
+def test_repository_can_start_verification_for_selected_pr_and_requirement():
+    user = get_user_model().objects.create_user(
+        username="verification-starter",
+        password="test-password",
+    )
+    repository = Repository.objects.create(
+        github_id=987004,
+        owner="aci",
+        name="verification-target",
+        full_name="aci/verification-target",
+    )
+    repository.members.add(user)
+    pull_request = PullRequest.objects.create(
+        repository=repository,
+        github_id=987005,
+        number=12,
+        title="Implement authentication",
+        author="kilel",
+        source_branch="feature/auth",
+        target_branch="main",
+        base_sha="b" * 40,
+        head_sha="a" * 40,
+        state="open",
+        is_merged=False,
+        created_at="2026-08-18T10:00:00Z",
+        updated_at="2026-08-18T10:00:00Z",
+    )
+    requirement = Requirement.objects.create(
+        repository=repository,
+        external_id="PROJ-123",
+        source="jira",
+        title="Users can authenticate",
+    )
+    commit = Commit.objects.create(
+        repository=repository,
+        pull_request=pull_request,
+        sha="c" * 40,
+        message="Implement authentication",
+        author="kilel",
+        committed_at="2026-08-18T10:30:00Z",
+    )
+    changed_file = ChangedFile.objects.create(
+        commit=commit,
+        filename="auth/service.py",
+        status="modified",
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    response = client.post(
+        reverse(
+            "repository-start-verification",
+            kwargs={"pk": repository.pk},
+        ),
+        {
+            "pull_request_number": pull_request.number,
+            "requirement_id": requirement.id,
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.json()["verification"]["pull_request"] == pull_request.id
+    assert response.json()["run"]["status"] == "queued"
+    assert response.json()["run"]["triggering_changed_file"] == changed_file.id
+    assert RequirementPullRequest.objects.filter(
+        requirement=requirement,
+        pull_request=pull_request,
+    ).exists()
 
 
 @pytest.mark.django_db

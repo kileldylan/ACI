@@ -6,6 +6,7 @@ import environ
 # =============================================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
 
 # =============================================================================
 # ENVIRONMENT VARIABLES
@@ -13,9 +14,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
     DEBUG=(bool, False),
+    ALLOW_TUNNEL_HOSTS=(bool, False),
 )
 
-environ.Env.read_env(BASE_DIR / ".env")
+environ.Env.read_env(BACKEND_DIR / ".env")
 
 # =============================================================================
 # SECURITY
@@ -55,10 +57,27 @@ LLM_MODEL = env("LLM_MODEL", default="gpt-4.1-mini")
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 SECRET_KEY = env("SECRET_KEY")
 
+DEBUG = env.bool("DEBUG", default=False)
+
 ALLOWED_HOSTS = env.list(
     "ALLOWED_HOSTS",
     default=["localhost", "127.0.0.1"],
 )
+
+# Dev tunnels (ngrok / cloudflared). A leading-dot entry is a subdomain wildcard
+# in Django, so ".ngrok-free.app" matches "abc123.ngrok-free.app".
+# Enabled when DEBUG=True, or when ALLOW_TUNNEL_HOSTS=True (even if DEBUG is off).
+ALLOW_TUNNEL_HOSTS = env.bool("ALLOW_TUNNEL_HOSTS", default=DEBUG)
+if ALLOW_TUNNEL_HOSTS:
+    for tunnel_host in (
+        ".ngrok-free.app",
+        ".ngrok-free.dev",
+        ".ngrok.app",
+        ".ngrok.io",
+        ".trycloudflare.com",
+    ):
+        if tunnel_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(tunnel_host)
 
 # =============================================================================
 # APPLICATIONS

@@ -1,9 +1,14 @@
-from rest_framework import viewsets
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from ACI_backend.ACIApp.models import (
     DeliveryDecision,
     Evidence,
+    PullRequest,
     Repository,
+    Requirement,
+    RequirementPullRequest,
     TestExecution,
     Verification,
     VerificationRun,
@@ -12,11 +17,18 @@ from ACI_backend.api.serializers import (
     DeliveryDecisionSerializer,
     EvidenceSerializer,
     RepositorySerializer,
+    PullRequestSerializer,
+    RequirementSerializer,
     VerificationRunSerializer,
     TestExecutionSerializer,
     VerificationSerializer,
 )
 from ACI_backend.api.permissions import visible_repositories
+from ACI_backend.integrations.jira.client import JiraAPIError, JiraClient
+from ACI_backend.integrations.jira.service import ingest_jira_requirement
+from ACI_backend.integrations.verification.service import (
+    start_initial_verification,
+)
 
 
 class RepositoryViewSet(viewsets.ModelViewSet):
@@ -31,6 +43,101 @@ class RepositoryViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         repository = serializer.save()
         repository.members.add(self.request.user)
+
+    @action(detail=True, methods=["get"], url_path="pull-requests")
+    def pull_requests(self, request, pk=None):
+        repository = self.get_object()
+        pull_requests = repository.pull_requests.order_by("-updated_at", "-id")
+        return Response(PullRequestSerializer(pull_requests, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def requirements(self, request, pk=None):
+        repository = self.get_object()
+        requirements = repository.requirements.order_by("-updated_at", "-id")
+        return Response(RequirementSerializer(requirements, many=True).data)
+
+    @action(detail=True, methods=["post"], url_path="start-verification")
+    def start_verification(self, request, pk=None):
+        repository = self.get_object()
+        pull_request = self._get_pull_request(repository, request.data)
+        if pull_request is None:
+            return Response(
+                {"detail": "A valid pull request id or number is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        requirement = self._get_requirement(
+            repository,
+            request.data,
+            pull_request,
+        )
+        if requirement is None:
+            return Response(
+                {
+                    "detail": (
+                        "A requirement id or Jira key is required, and the Jira "
+                        "issue must be accessible."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        RequirementPullRequest.objects.get_or_create(
+            requirement=requirement,
+            pull_request=pull_request,
+        )
+        try:
+            verification, run = start_initial_verification(
+                requirement=requirement,
+                pull_request=pull_request,
+            )
+        except ValueError as error:
+            return Response(
+                {"detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(
+            {
+                "verification": VerificationSerializer(verification).data,
+                "run": VerificationRunSerializer(run).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @staticmethod
+    def _get_pull_request(repository, data):
+        pull_request_id = data.get("pull_request_id")
+        pull_request_number = data.get("pull_request_number")
+        if pull_request_id is not None:
+            return repository.pull_requests.filter(pk=pull_request_id).first()
+        if pull_request_number is not None:
+            return repository.pull_requests.filter(
+                number=pull_request_number,
+            ).first()
+        return None
+
+    @staticmethod
+    def _get_requirement(repository, data, pull_request):
+        requirement_id = data.get("requirement_id")
+        jira_key = data.get("jira_key")
+        if requirement_id is not None:
+            return repository.requirements.filter(pk=requirement_id).first()
+        if not jira_key:
+            return None
+        requirement = repository.requirements.filter(
+            source="jira",
+            external_id=jira_key,
+        ).first()
+        if requirement is not None:
+            return requirement
+        try:
+            jira_issue = JiraClient().get_issue(jira_key)
+        except JiraAPIError:
+            return None
+        return ingest_jira_requirement(
+            pull_request=pull_request,
+            jira_issue=jira_issue,
+        )
 
 
 class EvidenceViewSet(viewsets.ReadOnlyModelViewSet):
