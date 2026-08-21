@@ -1,13 +1,16 @@
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.DEV
+  ? '/api'
+  : (import.meta.env.VITE_API_URL || '/api');
 
 const api = axios.create({
   baseURL: API_BASE,
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Important for Django session auth
 });
 
 // Response interceptor for error handling
@@ -15,7 +18,12 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response) {
-      toast.error(error.response.data?.detail || 'An error occurred');
+      if (error.response.status === 401) {
+        toast.error('Please log in again');
+        // Redirect to login if needed
+      } else {
+        toast.error(error.response.data?.detail || 'An error occurred');
+      }
     } else if (error.request) {
       toast.error('No response from server');
     } else {
@@ -26,34 +34,60 @@ api.interceptors.response.use(
 );
 
 export const aciApi = {
-  // Dashboard
-  getDashboardStats: () => api.get('/dashboard/stats/'),
+  // ============ REPOSITORIES ============
+  getRepositories: (params = {}) => 
+    api.get('/repositories/', { params }),
   
-  // Requirements
-  getRequirements: (params = {}) => api.get('/requirements/', { params }),
-  getRequirement: (id) => api.get(`/requirements/${id}/`),
-  getRequirementByKey: (key) => api.get(`/requirements/?external_id=${key}`),
-
-  // Verifications
-  getVerifications: (params = {}) => api.get('/verifications/', { params }),
-  getVerification: (id) => api.get(`/verifications/${id}/`),
+  getRepository: (id) => 
+    api.get(`/repositories/${id}/`),
   
-  // Delivery Decisions
-  getDeliveryDecisions: (params = {}) => api.get('/delivery-decisions/', { params }),
-  getDeliveryDecision: (id) => api.get(`/delivery-decisions/${id}/`),
+  getRepositoryPullRequests: (repoId, params = {}) => 
+    api.get(`/repositories/${repoId}/pull-requests/`, { params }),
+  
+  getRepositoryRequirements: (repoId, params = {}) => 
+    api.get(`/repositories/${repoId}/requirements/`, { params }),
 
-  // Pull Requests
-  getPullRequests: (params = {}) => api.get('/pull-requests/', { params }),
-  getPullRequest: (id) => api.get(`/pull-requests/${id}/`),
+  startVerification: (repoId, data) => 
+    api.post(`/repositories/${repoId}/start-verification/`, data),
 
-  // Evidence
-  getEvidence: (params = {}) => api.get('/evidence/', { params }),
+  // ============ REQUIREMENTS ============
+  getRequirements: (params = {}) => 
+    api.get('/requirements/', { params }),
+  
+  getRequirement: (id) => 
+    api.get(`/requirements/${id}/`),
 
-  // Repositories
-  getRepositories: () => api.get('/repositories/'),
+  // ============ VERIFICATIONS ============
+  getVerifications: (params = {}) => 
+    api.get('/verifications/', { params }),
+  
+  getVerification: (id) => 
+    api.get(`/verifications/${id}/`),
+  
+  // ============ VERIFICATION RUNS ============
+  getVerificationRuns: (params = {}) => 
+    api.get('/verification-runs/', { params }),
+  
+  getVerificationRun: (id) => 
+    api.get(`/verification-runs/${id}/`),
 
-  // Start verification
-  startVerification: (data) => api.post('/start-verification/', data),
+  // ============ DELIVERY DECISIONS ============
+  getDeliveryDecisions: (params = {}) => 
+    api.get('/delivery-decisions/', { params }),
+  
+  getDeliveryDecision: (id) => 
+    api.get(`/delivery-decisions/${id}/`),
+
+  // ============ EVIDENCE ============
+  getEvidence: (params = {}) => 
+    api.get('/evidence/', { params }),
+  
+  getEvidenceByRequirement: (requirementId) =>
+    api.get('/evidence/', { params: { requirement: requirementId } }),
+
+  // ============ TEST EXECUTIONS ============
+  getTestExecutions: (params = {}) => 
+    api.get('/test-executions/', { params }),
 };
 
 export default aciApi;

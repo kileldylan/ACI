@@ -9,6 +9,8 @@ import {
   Sparkles,
   Shield,
   Activity,
+  FileCode,
+  FileText,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { clsx } from 'clsx';
@@ -17,12 +19,13 @@ const Navigation = () => {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   
-  const navItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
-    { icon: GitPullRequest, label: 'Pull Requests', path: '/pull-requests' },
-    { icon: CheckCircle, label: 'Verifications', path: '/verifications' },
-    { icon: Activity, label: 'Evidence', path: '/evidence' },
-  ];
+const navItems = [
+  { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
+  { icon: GitPullRequest, label: 'Pull Requests', path: '/pull-requests' },
+  { icon: CheckCircle, label: 'Verifications', path: '/verifications' },
+  { icon: FileCode, label: 'Evidence', path: '/evidence' },
+  { icon: FileText, label: 'Requirements', path: '/requirements' },
+];
 
   return (
     <nav className="fixed left-0 top-0 h-full w-64 bg-dark-card border-r border-dark-border p-4 flex flex-col">

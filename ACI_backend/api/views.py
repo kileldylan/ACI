@@ -157,9 +157,12 @@ class EvidenceViewSet(viewsets.ReadOnlyModelViewSet):
             membership_path="requirement__repository__members",
         )
         repository_id = self.request.query_params.get("repository")
+        requirement_id = self.request.query_params.get("requirement")
         status = self.request.query_params.get("status")
         if repository_id:
             queryset = queryset.filter(requirement__repository_id=repository_id)
+        if requirement_id:
+            queryset = queryset.filter(requirement_id=requirement_id)
         if status:
             queryset = queryset.filter(status=status)
         return queryset
@@ -181,9 +184,15 @@ class VerificationViewSet(viewsets.ReadOnlyModelViewSet):
             membership_path="requirement__repository__members",
         )
         repository_id = self.request.query_params.get("repository")
+        requirement_id = self.request.query_params.get("requirement")
+        pull_request_id = self.request.query_params.get("pull_request")
         status = self.request.query_params.get("status")
         if repository_id:
             queryset = queryset.filter(requirement__repository_id=repository_id)
+        if requirement_id:
+            queryset = queryset.filter(requirement_id=requirement_id)
+        if pull_request_id:
+            queryset = queryset.filter(pull_request_id=pull_request_id)
         if status:
             queryset = queryset.filter(status=status)
         return queryset
