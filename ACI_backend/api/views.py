@@ -16,8 +16,8 @@ from ACI_backend.ACIApp.models import (
 from ACI_backend.api.serializers import (
     DeliveryDecisionSerializer,
     EvidenceSerializer,
-    RepositorySerializer,
     PullRequestSerializer,
+    RepositorySerializer,
     RequirementSerializer,
     VerificationRunSerializer,
     TestExecutionSerializer,
@@ -49,6 +49,60 @@ class RepositoryViewSet(viewsets.ModelViewSet):
         repository = self.get_object()
         pull_requests = repository.pull_requests.order_by("-updated_at", "-id")
         return Response(PullRequestSerializer(pull_requests, many=True).data)
+
+    @action(detail=True, methods=["get"], url_path=r"pull-requests/(?P<pr_pk>[^/.]+)")
+    def pull_request_detail(self, request, pk=None, pr_pk=None):
+        repository = self.get_object()
+        pull_request = repository.pull_requests.filter(pk=pr_pk).first()
+
+        if not pull_request:
+            return Response(
+                {"detail": "Pull request not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Load commits with changed files
+        commits = (
+            pull_request.commits
+            .prefetch_related("changed_files")
+            .order_by("committed_at")
+        )
+
+        commits_data = []
+        for commit in commits:
+            files = [
+                {
+                    "filename": f.filename,
+                    "status": f.status,
+                    "additions": f.additions,
+                    "deletions": f.deletions,
+                    "changes": f.changes,
+                    "patch": f.patch,
+                }
+                for f in commit.changed_files.all()
+            ]
+            commits_data.append({
+                "sha": commit.sha,
+                "message": commit.message,
+                "author": commit.author,
+                "committed_at": commit.committed_at,
+                "changed_files": files,
+            })
+
+        # Get verifications linked to this PR
+        verifications = (
+            Verification.objects
+            .filter(pull_request=pull_request)
+            .select_related("requirement")
+            .prefetch_related("evidence_links__evidence")
+        )
+
+        data = {
+            "pull_request": PullRequestSerializer(pull_request).data,
+            "commits": commits_data,
+            "verifications": VerificationSerializer(verifications, many=True).data,
+        }
+        return Response(data)
 
     @action(detail=True, methods=["get"])
     def requirements(self, request, pk=None):

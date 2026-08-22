@@ -22,7 +22,6 @@ api.interceptors.response.use(
     if (error.response) {
       if (error.response.status === 401) {
         toast.error('Please log in again');
-        // Redirect to login if needed
       } else {
         toast.error(error.response.data?.detail || 'An error occurred');
       }
@@ -54,6 +53,10 @@ export const aciApi = {
   
   getRepositoryRequirements: (repoId, params = {}) => 
     api.get(`/repositories/${repoId}/requirements/`, { params }),
+
+  // New: Pull Request Detail
+  getPullRequestDetail: (repoId, prId) => 
+    api.get(`/repositories/${repoId}/pull-requests/${prId}/`),
 
   startVerification: (repoId, data) => 
     api.post(`/repositories/${repoId}/start-verification/`, data),

@@ -1,6 +1,8 @@
 from rest_framework import serializers
 
 from ACI_backend.ACIApp.models import (
+    ChangedFile,
+    Commit,
     DeliveryDecision,
     Evidence,
     EvidenceInvalidation,
@@ -11,7 +13,6 @@ from ACI_backend.ACIApp.models import (
     Verification,
     VerificationRun,
 )
-
 
 
 class EvidenceInvalidationSerializer(serializers.ModelSerializer):
@@ -37,7 +38,7 @@ class RepositorySerializer(serializers.ModelSerializer):
         model = Repository
         fields = [
             "id",
-        "github_id",
+            "github_id",
             "owner",
             "name",
             "full_name",
@@ -75,6 +76,61 @@ class PullRequestSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "received_at",
+        ]
+        read_only_fields = fields
+
+
+class ChangedFileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChangedFile
+        fields = [
+            "id",
+            "filename",
+            "status",
+            "additions",
+            "deletions",
+            "changes",
+            "patch",
+        ]
+
+
+class CommitSerializer(serializers.ModelSerializer):
+    changed_files = ChangedFileSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Commit
+        fields = [
+            "id",
+            "sha",
+            "message",
+            "author",
+            "committed_at",
+            "changed_files",
+        ]
+
+
+class PullRequestDetailSerializer(serializers.ModelSerializer):
+    commits = CommitSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PullRequest
+        fields = [
+            "id",
+            "repository",
+            "github_id",
+            "number",
+            "title",
+            "author",
+            "source_branch",
+            "target_branch",
+            "base_sha",
+            "head_sha",
+            "state",
+            "is_merged",
+            "created_at",
+            "updated_at",
+            "received_at",
+            "commits",
         ]
         read_only_fields = fields
 

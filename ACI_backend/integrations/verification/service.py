@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from ACI_backend.ACIApp.models import (
     ChangedFile,
+    CriterionVerification,
     DeliveryDecision,
     Evidence,
     EvidenceInvalidation,
@@ -111,6 +112,140 @@ def validate_evaluator_conclusion(*, requirement, evidence, conclusion):
     return conclusion
 
 
+def _get_changed_filenames(evidence):
+    """Extract unique filenames from code evidence."""
+    filenames = set()
+    for item in evidence:
+        if item.evidence_type != "code":
+            continue
+        if item.changed_file and item.changed_file.filename:
+            filenames.add(item.changed_file.filename)
+        elif item.metadata and item.metadata.get("filename"):
+            filenames.add(item.metadata["filename"])
+    return sorted(filenames)
+
+
+def _get_evidence_labels(evidence, ev_type):
+    """Extract human readable names for test or CI evidence."""
+    labels = []
+    for item in evidence:
+        if item.evidence_type != ev_type:
+            continue
+        name = (
+            item.metadata.get("name")
+            or item.metadata.get("context")
+            or item.description
+        )
+        if name:
+            labels.append(str(name))
+    return labels
+
+
+def _build_evidence_summary(pull_request, valid_evidence, missing_types=None):
+    """Create a specific, informative summary based on actual evidence."""
+    pr_num = pull_request.number
+    code_files = _get_changed_filenames(valid_evidence)
+
+    file_part = ""
+    if code_files:
+        shown = ", ".join(code_files[:4])
+        if len(code_files) > 4:
+            shown += f" (+{len(code_files) - 4} more)"
+        file_part = f" Changes in {len(code_files)} files: {shown}."
+
+    if missing_types:
+        labels = {"test": "test", "ci": "CI"}
+        missing = " and ".join(labels.get(t, t) for t in sorted(missing_types))
+        return (
+            f"Code evidence collected for PR #{pr_num}.{file_part} "
+            f"Missing valid {missing} evidence."
+        )
+
+    # Verified case
+    test_names = _get_evidence_labels(valid_evidence, "test")
+    ci_names = _get_evidence_labels(valid_evidence, "ci")
+
+    extra = ""
+    if test_names or ci_names:
+        parts = []
+        if test_names:
+            parts.append(f"tests: {', '.join(test_names[:2])}")
+        if ci_names:
+            parts.append(f"CI: {', '.join(ci_names[:2])}")
+        extra = " (" + "; ".join(parts) + ")"
+
+    return (
+        f"PR #{pr_num} has valid code, test, and CI evidence.{file_part}{extra}"
+    )
+
+
+def _evaluate_evidence(*, requirement, pull_request, evidence):
+    """Apply the deterministic policy to an evidence collection.
+
+    Produces more specific summaries that mention actual changed files
+    and evidence sources instead of generic templates.
+    """
+
+    evidence = list(evidence)
+    valid_evidence = [item for item in evidence if item.status == "valid"]
+    failed_evidence = [
+        item
+        for item in evidence
+        if (
+            item.status == "invalid"
+            and item.evidence_type in {"test", "ci"}
+            and item.metadata.get("source") == "github"
+            and item.metadata.get("head_sha") == pull_request.head_sha
+        )
+    ]
+    evidence_types = {item.evidence_type for item in valid_evidence}
+
+    if failed_evidence:
+        names = _get_evidence_labels(failed_evidence, "test") + _get_evidence_labels(failed_evidence, "ci")
+        name_part = f" ({names[0]})" if names else ""
+        return {
+            "status": "failed",
+            "summary": (
+                f"A test or CI check failed for the current head of PR "
+                f"#{pull_request.number}{name_part}."
+            ),
+            "confidence": 0.0,
+            "evidence": valid_evidence + failed_evidence,
+        }
+
+    if "code" not in evidence_types:
+        return {
+            "status": "unverified",
+            "summary": (
+                f"No valid code evidence is available for PR "
+                f"#{pull_request.number}."
+            ),
+            "confidence": 0.0,
+            "evidence": valid_evidence,
+        }
+
+    required_types = {"code", "test", "ci"}
+    missing_types = required_types - evidence_types
+    if missing_types:
+        summary = _build_evidence_summary(
+            pull_request, valid_evidence, missing_types=missing_types
+        )
+        return {
+            "status": "partial",
+            "summary": summary,
+            "confidence": 0.55,
+            "evidence": valid_evidence,
+        }
+
+    summary = _build_evidence_summary(pull_request, valid_evidence)
+    return {
+        "status": "verified",
+        "summary": summary,
+        "confidence": 0.9,
+        "evidence": valid_evidence,
+    }
+
+
 def evaluate(requirement, evidence):
     """Evaluate supplied evidence through ACI's stable evaluator contract."""
 
@@ -143,83 +278,6 @@ def evaluate(requirement, evidence):
     )
 
 
-def _evaluate_evidence(*, requirement, pull_request, evidence):
-    """Apply the deterministic policy to an evidence collection.
-
-    This baseline policy only makes a strong conclusion when the requirement
-    has valid code, test, and CI evidence for the pull request. It is a
-    conservative bridge to a semantic evaluator: its result is deterministic,
-    auditable, and can later be replaced by an AI conclusion using the same
-    completion lifecycle.
-    """
-
-    evidence = list(evidence)
-    valid_evidence = [item for item in evidence if item.status == "valid"]
-    failed_evidence = [
-        item
-        for item in evidence
-        if (
-            item.status == "invalid"
-            and item.evidence_type in {"test", "ci"}
-            and item.metadata.get("source") == "github"
-            and item.metadata.get("head_sha") == pull_request.head_sha
-        )
-    ]
-    evidence_types = {item.evidence_type for item in valid_evidence}
-
-    if failed_evidence:
-        return {
-            "status": "failed",
-            "summary": (
-                f"A test or CI check failed for the current head of PR "
-                f"#{pull_request.number}."
-            ),
-            "confidence": 0.0,
-            "evidence": valid_evidence + failed_evidence,
-        }
-
-    if "code" not in evidence_types:
-        return {
-            "status": "unverified",
-            "summary": (
-                f"No valid code evidence is available for PR "
-                f"#{pull_request.number}."
-            ),
-            "confidence": 0.0,
-            "evidence": valid_evidence,
-        }
-
-    required_types = {"code", "test", "ci"}
-    missing_types = required_types - evidence_types
-    if missing_types:
-        labels = {
-            "test": "test",
-            "ci": "CI",
-        }
-        missing = " and ".join(
-            labels[item] for item in sorted(missing_types)
-        )
-        return {
-            "status": "partial",
-            "summary": (
-                f"Fresh code evidence was collected from PR "
-                f"#{pull_request.number}. Missing valid {missing} evidence."
-            ),
-            "confidence": 0.5,
-            "evidence": valid_evidence,
-        }
-
-    return {
-        "status": "verified",
-        "summary": (
-            f"PR #{pull_request.number} has valid code, test, and CI "
-            "evidence for this requirement."
-        ),
-        "confidence": 0.9,
-        "evidence": valid_evidence,
-    }
-
-
 def evaluate_reverification_evidence(*, requirement, pull_request):
     """Evaluate current persisted evidence for a requirement and pull request."""
 
@@ -233,6 +291,36 @@ def evaluate_reverification_evidence(*, requirement, pull_request):
         pull_request=pull_request,
         evidence=evidence,
     )
+
+
+def _build_criteria_summary(verification):
+    """Create a short summary of criterion evaluation results."""
+    cvs = list(
+        CriterionVerification.objects.filter(verification=verification)
+        .select_related("criterion")
+        .order_by("criterion__order")
+    )
+    if not cvs:
+        return ""
+
+    satisfied = sum(1 for c in cvs if c.status == "satisfied")
+    partial = sum(1 for c in cvs if c.status == "partial")
+    missing = sum(1 for c in cvs if c.status == "missing")
+    failed = sum(1 for c in cvs if c.status == "failed")
+
+    total = len(cvs)
+    parts = []
+    if satisfied:
+        parts.append(f"{satisfied} satisfied")
+    if partial:
+        parts.append(f"{partial} partial")
+    if missing:
+        parts.append(f"{missing} missing")
+    if failed:
+        parts.append(f"{failed} failed")
+
+    detail = "; ".join(parts)
+    return f" Criteria status: {detail} ({total} total)."
 
 
 def ingest_changed_file_evidence(
@@ -696,13 +784,11 @@ def complete_reverification_run(
 
 
 def process_next_reverification_run(*, evaluator=None, test_runner=None):
-    """Process the oldest queued run using ACI's conservative baseline.
+    """Process the oldest queued run.
 
-    This is intentionally not an AI evaluator. It collects fresh code evidence
-    from the triggering pull request and records a ``partial`` result, clearly
-    signalling that semantic verification is still required. A future
-    evaluator can replace the conclusion without changing the durable queue
-    lifecycle.
+    Collects evidence, runs criteria evaluation, and produces a more
+    detailed top-level summary that includes both evidence details and
+    criterion results.
     """
 
     queued_run = VerificationRun.objects.filter(
@@ -741,6 +827,7 @@ def process_next_reverification_run(*, evaluator=None, test_runner=None):
         pull_request=pull_request,
         status__in=["valid", "invalid"],
     ).order_by("id")
+
     if evaluator is None:
         conclusion = evaluate(
             verification.requirement,
@@ -756,10 +843,20 @@ def process_next_reverification_run(*, evaluator=None, test_runner=None):
             evidence=current_evidence,
             conclusion=conclusion,
         )
+
+    # Run per-criterion analysis
     execute_criteria(
         verification=verification,
         evidence=current_evidence,
     )
+
+    # Enhance the top-level summary with criterion results for more detail
+    base_summary = conclusion.get("summary", "")
+    criteria_part = _build_criteria_summary(verification)
+    if criteria_part:
+        enhanced_summary = (base_summary + criteria_part).strip()
+        conclusion = {**conclusion, "summary": enhanced_summary}
+
     verification = complete_reverification_run(
         run_id=run.id,
         **conclusion,

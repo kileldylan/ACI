@@ -60,13 +60,23 @@ export const PullRequests = () => {
         // Fetch from all repositories
         for (const repo of repos) {
           const prRes = await aciApi.getRepositoryPullRequests(repo.id, { limit: 50 });
-          const repoPrs = responseItems(prRes).map(pr => ({ ...pr, repo: repo.full_name }));
+          const repoPrs = responseItems(prRes).map(pr => ({
+            ...pr,
+            repo: repo.full_name,
+            // Ensure we keep the repository id for navigation
+            repository: pr.repository ?? repo.id,
+          }));
           prs = [...prs, ...repoPrs];
         }
       } else {
-        const prRes = await aciApi.getRepositoryPullRequests(selectedRepo, { limit: 50 });
-        const repo = repos.find(r => r.id === parseInt(selectedRepo));
-        prs = responseItems(prRes).map(pr => ({ ...pr, repo: repo?.full_name || 'Unknown' }));
+        const repoId = parseInt(selectedRepo);
+        const prRes = await aciApi.getRepositoryPullRequests(repoId, { limit: 50 });
+        const repo = repos.find(r => r.id === repoId);
+        prs = responseItems(prRes).map(pr => ({
+          ...pr,
+          repo: repo?.full_name || 'Unknown',
+          repository: pr.repository ?? repoId,
+        }));
       }
 
       // Sort by creation date (newest first)
@@ -263,7 +273,7 @@ export const PullRequests = () => {
               <div
                 key={pr.id}
                 className="card p-5 hover:border-accent-middle/30 hover:shadow-lg hover:shadow-accent-start/5 transition-all duration-300 cursor-pointer group"
-                onClick={() => navigate(`/pull-requests/${pr.id}`)}
+                onClick={() => navigate(`/pull-requests/${pr.id}?repo=${pr.repository}`)}
               >
                 <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                   {/* Left: PR Info */}

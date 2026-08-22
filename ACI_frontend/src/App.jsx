@@ -11,6 +11,7 @@ import VerificationDetail from './components/VerificationDetail';
 import EvidenceChain from './components/EvidenceChain';
 import Analytics from './components/Analytics';
 import PullRequests from './components/PullRequests';
+import PullRequestDetail from './components/PullRequestDetail';
 import Requirements from './components/Requirements';
 import ProtectedRoute from './components/ProtectedRoute';
 import { Login, Register } from './components/AuthPage';
@@ -53,7 +54,7 @@ function App() {
         <AuthProvider>
         <BrowserRouter>
           <Toaster
-            position="top-right"
+            position='top-right'
             toastOptions={{
               duration: 4000,
               className: 'bg-dark-card text-dark-text border border-dark-border',
@@ -70,7 +71,8 @@ function App() {
               <Route path="evidence" element={<EvidencePage />} />
               <Route path="analytics" element={<Analytics />} />
               <Route path="pull-requests" element={<PullRequests />} />
-<Route path="requirements" element={<Requirements />} />
+              <Route path="pull-requests/:id" element={<PullRequestDetail />} />
+              <Route path="requirements" element={<Requirements />} />
             </Route>
             </Route>
           </Routes>
