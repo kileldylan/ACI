@@ -1,4 +1,5 @@
 from rest_framework.routers import DefaultRouter
+from django.urls import include, path
 
 from ACI_backend.api.views import (
     DeliveryDecisionViewSet,
@@ -43,3 +44,4 @@ router.register(
 )
 
 urlpatterns = router.urls
+urlpatterns += [path("auth/", include("ACI_backend.api.auth_urls"))]

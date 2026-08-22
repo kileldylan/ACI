@@ -11,6 +11,8 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true, // Important for Django session auth
+  xsrfCookieName: 'csrftoken',
+  xsrfHeaderName: 'X-CSRFToken',
 });
 
 // Response interceptor for error handling
@@ -34,6 +36,12 @@ api.interceptors.response.use(
 );
 
 export const aciApi = {
+  getCsrfToken: () => api.get('/auth/csrf/'),
+  register: (data) => api.post('/auth/register/', data),
+  login: (data) => api.post('/auth/login/', data),
+  logout: () => api.post('/auth/logout/'),
+  getCurrentUser: () => api.get('/auth/me/'),
+
   // ============ REPOSITORIES ============
   getRepositories: (params = {}) => 
     api.get('/repositories/', { params }),

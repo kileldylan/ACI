@@ -1,23 +1,25 @@
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   GitPullRequest, 
   CheckCircle, 
-  Settings,
   Sun,
   Moon,
   Sparkles,
   Shield,
-  Activity,
   FileCode,
   FileText,
+  LogOut,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { clsx } from 'clsx';
 
 const Navigation = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+  const { user, logout } = useAuth();
   
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
@@ -70,10 +72,14 @@ const navItems = [
         </button>
         
         <button
+          onClick={async () => {
+            await logout();
+            navigate('/login', { replace: true });
+          }}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-dark-hover transition-colors text-dark-muted hover:text-dark-text"
         >
-          <Settings className="w-5 h-5" />
-          <span className="text-sm font-medium">Settings</span>
+          <LogOut className="w-5 h-5" />
+          <span className="text-sm font-medium">Sign out {user?.username ? `(${user.username})` : ''}</span>
         </button>
         
         <div className="px-3 pt-2">

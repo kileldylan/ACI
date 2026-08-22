@@ -12,6 +12,9 @@ import EvidenceChain from './components/EvidenceChain';
 import Analytics from './components/Analytics';
 import PullRequests from './components/PullRequests';
 import Requirements from './components/Requirements';
+import ProtectedRoute from './components/ProtectedRoute';
+import { Login, Register } from './components/AuthPage';
+import { AuthProvider } from './context/AuthContext';
 
 function EvidencePage() {
   const [evidence, setEvidence] = React.useState([]);
@@ -47,6 +50,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
+        <AuthProvider>
         <BrowserRouter>
           <Toaster
             position="top-right"
@@ -56,7 +60,10 @@ function App() {
             }}
           />
           <Routes>
-            <Route path="/" element={<Layout />}>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/" element={<Layout />}>
               <Route index element={<Dashboard />} />
               <Route path="verifications" element={<VerificationList />} />
               <Route path="verifications/:id" element={<VerificationDetail />} />
@@ -65,8 +72,10 @@ function App() {
               <Route path="pull-requests" element={<PullRequests />} />
 <Route path="requirements" element={<Requirements />} />
             </Route>
+            </Route>
           </Routes>
         </BrowserRouter>
+        </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );
